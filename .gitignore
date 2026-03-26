@@ -4,3 +4,4 @@
 *.csv
 
 /eda_outputs/
+/script/eda_outputs/
