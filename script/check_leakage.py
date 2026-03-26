@@ -59,18 +59,18 @@ def parse_args() -> argparse.Namespace:
         "--profile-json",
         type=Path,
         default=None,
-        help="Optional manifest_profile.json from profile_manifest.py.",
+        help="Optional manifest_profile.json from data_profile.py.",
     )
     parser.add_argument(
         "--output",
         type=Path,
-        default=Path("leakage_report.json"),
+        default=Path("eda_outputs/leakage_report.json"),
         help="Path to write JSON leakage report.",
     )
     parser.add_argument(
         "--markdown-output",
         type=Path,
-        default=Path("leakage_report.md"),
+        default=Path("eda_outputs/leakage_report.md"),
         help="Path to write markdown leakage report.",
     )
     return parser.parse_args()
@@ -608,6 +608,7 @@ def main() -> None:
     profile = read_json(args.profile_json) if args.profile_json and args.profile_json.exists() else None
 
     report = build_report(df, profile)
+    args.output.parent.mkdir(parents=True, exist_ok=True)
     write_json(args.output, report)
 
     args.markdown_output.parent.mkdir(parents=True, exist_ok=True)

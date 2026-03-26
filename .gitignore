@@ -1,3 +1,6 @@
 *.json
 *.pyc
 *.png
+*.csv
+
+/eda_outputs/

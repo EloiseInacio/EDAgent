@@ -45,7 +45,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--output",
         type=Path,
-        default=Path("manifest_profile.json"),
+        default=Path("eda_outputs/manifest_profile.json"),
         help="Path to write the JSON profile output.",
     )
     parser.add_argument(
@@ -337,6 +337,7 @@ def main() -> None:
         base_path=args.base_path,
     )
 
+    args.output.parent.mkdir(parents=True, exist_ok=True)
     write_json(args.output, profile)
     print(f"Wrote manifest profile to {args.output}")
 
