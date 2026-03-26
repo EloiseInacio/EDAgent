@@ -59,6 +59,12 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Check whether referenced local paths exist on disk.",
     )
+    parser.add_argument(
+        "--base-path",
+        type=Path,
+        default=None,
+        help="Base directory to prepend to relative path-column values when checking existence.",
+    )
     return parser.parse_args()
 
 
@@ -169,7 +175,7 @@ def summarize_categorical(series: pd.Series) -> Optional[Dict[str, Any]]:
     }
 
 
-def profile_path_column(series: pd.Series, check_exists: bool) -> Dict[str, Any]:
+def profile_path_column(series: pd.Series, check_exists: bool, base_path: Optional[Path] = None) -> Dict[str, Any]:
     non_null = series.dropna()
     extensions = Counter()
     existing = 0
@@ -182,7 +188,10 @@ def profile_path_column(series: pd.Series, check_exists: bool) -> Dict[str, Any]
         if check_exists:
             checked += 1
             try:
-                if Path(value).expanduser().exists():
+                p = Path(value).expanduser()
+                if not p.is_absolute() and base_path is not None and not p.exists():
+                    p = base_path / p.name
+                if p.exists():
                     existing += 1
             except OSError:
                 pass
@@ -236,7 +245,7 @@ def infer_dataset_modality(column_profiles: List[Dict[str, Any]]) -> Dict[str, A
     }
 
 
-def build_profile(df: pd.DataFrame, source_path: Path, sample_size: int, check_exists: bool) -> Dict[str, Any]:
+def build_profile(df: pd.DataFrame, source_path: Path, sample_size: int, check_exists: bool, base_path: Optional[Path] = None) -> Dict[str, Any]:
     column_profiles: List[Dict[str, Any]] = []
     candidate_columns = {
         "path_columns": [],
@@ -273,7 +282,7 @@ def build_profile(df: pd.DataFrame, source_path: Path, sample_size: int, check_e
             profile["categorical_summary"] = categorical_summary
 
         if inferred_role == "path/reference":
-            profile["path_profile"] = profile_path_column(series, check_exists)
+            profile["path_profile"] = profile_path_column(series, check_exists, base_path=base_path)
             candidate_columns["path_columns"].append(str(column_name))
         elif inferred_role == "label/target":
             candidate_columns["label_columns"].append(str(column_name))
@@ -325,6 +334,7 @@ def main() -> None:
         source_path=args.manifest_csv,
         sample_size=args.sample_size,
         check_exists=args.check_path_exists,
+        base_path=args.base_path,
     )
 
     write_json(args.output, profile)

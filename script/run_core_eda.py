@@ -623,11 +623,13 @@ def plot_label_distribution(label_distribution: Dict[str, Any], output_dir: Path
     return str(path)
 
 
-def plot_numeric_histograms(df: pd.DataFrame, numeric_columns: List[str], output_dir: Path) -> List[str]:
+def plot_numeric_histograms(df: pd.DataFrame, numeric_columns: List[str], output_dir: Path, max_cols: int = 12) -> List[str]:
     paths: List[str] = []
-    for col in numeric_columns[:6]:
+    for col in numeric_columns:
+        if len(paths) >= max_cols:
+            break
         series = pd.to_numeric(df[col], errors="coerce").dropna()
-        if series.empty:
+        if series.empty or series.std() == 0:
             continue
         plt.figure(figsize=(8, 5))
         plt.hist(series, bins=30)
