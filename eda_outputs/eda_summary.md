@@ -35,5 +35,5 @@
 - bbox_area_ratio: 89 outliers (0.036)
 
 ## Asset metadata
-- Status: not_available
-- No accessible assets were successfully profiled.
+- Status: ok
+- Derived skeleton metadata from column 'filename'.

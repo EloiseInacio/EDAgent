@@ -125,6 +125,12 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Attempt to derive metadata from referenced assets when helper modules are available.",
     )
+    parser.add_argument(
+        "--base-path",
+        type=Path,
+        default=None,
+        help="Base directory to prepend to relative path-column values when resolving assets.",
+    )
     return parser.parse_args()
 
 
@@ -382,6 +388,7 @@ def derive_asset_metadata(
     max_asset_rows: int,
     label_column: Optional[str] = None,
     text_columns: Optional[List[str]] = None,
+    base_path: Optional[Path] = None,
 ) -> Dict[str, Any]:
     results: Dict[str, Any] = {
         "status": "not_attempted",
@@ -395,7 +402,7 @@ def derive_asset_metadata(
 
     sampled = df.copy()
     if len(sampled) > max_asset_rows:
-        sampled = sampled.head(max_asset_rows).copy()
+        sampled = sampled.sample(max_asset_rows, random_state=42).copy()
     results["sampled_rows"] = int(len(sampled))
 
     derived_frames = []
@@ -442,6 +449,8 @@ def derive_asset_metadata(
                 if pd.isna(value):
                     continue
                 p = Path(str(value)).expanduser()
+                if not p.is_absolute() and base_path is not None and not p.exists():
+                    p = base_path / p.name
                 if not p.exists():
                     continue
                 row: Dict[str, Any] = {"row_index": int(idx), "source_column": path_col, "source_type": "video_path", "path": str(p)}
@@ -472,6 +481,8 @@ def derive_asset_metadata(
                 if pd.isna(value):
                     continue
                 p = Path(str(value)).expanduser()
+                if not p.is_absolute() and base_path is not None and not p.exists():
+                    p = base_path / p.name
                 if not p.exists():
                     continue
                 row = {"row_index": int(idx), "source_column": path_col, "source_type": "skeleton_path", "path": str(p)}
@@ -509,6 +520,8 @@ def derive_asset_metadata(
                 if pd.isna(value):
                     continue
                 p = Path(str(value)).expanduser()
+                if not p.is_absolute() and base_path is not None and not p.exists():
+                    p = base_path / p.name
                 if not p.exists():
                     continue
                 row_label = None
@@ -653,6 +666,7 @@ def build_eda_summary(
     output_dir: Path,
     include_asset_metadata: bool,
     max_asset_rows: int,
+    base_path: Optional[Path] = None,
 ) -> Dict[str, Any]:
     label_column = choose_primary_column(candidates.get("label_columns", []), df, max_unique=50)
     grouping_columns = [c for c in candidates.get("grouping_columns", []) if c in df.columns][:5]
@@ -688,6 +702,7 @@ def build_eda_summary(
             max_asset_rows=max_asset_rows,
             label_column=label_column,
             text_columns=text_columns,
+            base_path=base_path,
         )
         derived_asset_summary = merge_derived_numeric_summary(asset_metadata.get("derived_asset_metadata_csv"))
 
@@ -778,6 +793,7 @@ def main() -> None:
         output_dir=args.output_dir,
         include_asset_metadata=args.include_asset_metadata,
         max_asset_rows=args.max_asset_rows,
+        base_path=args.base_path,
     )
     summary["input_manifest"] = str(args.manifest_csv)
 
