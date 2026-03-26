@@ -18,6 +18,9 @@ from collections import Counter
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
+# Matches filenames whose stem ends with _<integer>, e.g. "UUID_0" or "clip_12"
+_SEGMENT_RE = re.compile(r"^(.+)_(\d+)$")
+
 import numpy as np
 import pandas as pd
 
@@ -175,6 +178,54 @@ def summarize_categorical(series: pd.Series) -> Optional[Dict[str, Any]]:
     }
 
 
+def _detect_segment_pattern(
+    values: List[str],
+    min_match_rate: float = 0.5,
+    min_repeated_prefixes: int = 2,
+) -> Optional[Dict[str, Any]]:
+    """
+    Detect whether path values follow a <PREFIX>_<int>.<ext> segmentation pattern.
+
+    This indicates that multiple values share a common prefix (e.g. a recording
+    session or subject UUID), with only a numeric suffix distinguishing segments.
+
+    Requirements for a positive detection:
+    - At least `min_match_rate` fraction of values match the pattern
+    - At least `min_repeated_prefixes` distinct prefixes appear more than once,
+      confirming the prefix encodes a real grouping rather than random coincidence
+
+    Returns a dict with detection metadata, or None if the pattern is absent.
+    """
+    prefix_counts: Counter = Counter()
+    matched = 0
+
+    for v in values:
+        stem = Path(v).stem  # strip extension; handles both basenames and full paths
+        m = _SEGMENT_RE.match(stem)
+        if m:
+            matched += 1
+            prefix_counts[m.group(1)] += 1
+
+    total = len(values)
+    if total == 0 or matched / total < min_match_rate:
+        return None
+
+    repeated = sum(1 for c in prefix_counts.values() if c > 1)
+    if repeated < min_repeated_prefixes:
+        return None
+
+    example = prefix_counts.most_common(1)[0][0]
+    return {
+        "detected": True,
+        "pattern": "<prefix>_<int>",
+        "match_rate": round(matched / total, 3),
+        "unique_prefix_count": len(prefix_counts),
+        "repeated_prefix_count": repeated,
+        "example_prefix": example,
+        "suggested_grouping_column": None,  # set by caller using the source column name
+    }
+
+
 def profile_path_column(series: pd.Series, check_exists: bool, base_path: Optional[Path] = None) -> Dict[str, Any]:
     non_null = series.dropna()
     extensions = Counter()
@@ -204,6 +255,12 @@ def profile_path_column(series: pd.Series, check_exists: bool, base_path: Option
     if check_exists and checked:
         result["path_existence_rate"] = existing / checked
         result["checked_paths"] = checked
+
+    sample = non_null.astype(str).head(500).tolist()
+    seg = _detect_segment_pattern(sample)
+    if seg is not None:
+        result["segment_pattern"] = seg
+
     return result
 
 
@@ -282,7 +339,14 @@ def build_profile(df: pd.DataFrame, source_path: Path, sample_size: int, check_e
             profile["categorical_summary"] = categorical_summary
 
         if inferred_role == "path/reference":
-            profile["path_profile"] = profile_path_column(series, check_exists, base_path=base_path)
+            path_prof = profile_path_column(series, check_exists, base_path=base_path)
+            seg = path_prof.get("segment_pattern")
+            if seg is not None:
+                derived_col = f"{normalize_name(str(column_name))}_prefix"
+                seg["suggested_grouping_column"] = derived_col
+                if derived_col not in candidate_columns["grouping_columns"]:
+                    candidate_columns["grouping_columns"].append(derived_col)
+            profile["path_profile"] = path_prof
             candidate_columns["path_columns"].append(str(column_name))
         elif inferred_role == "label/target":
             candidate_columns["label_columns"].append(str(column_name))

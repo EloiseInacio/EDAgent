@@ -38,6 +38,7 @@ from utils import (
     safe_float,
     maybe_numeric,
     sanitize_filename,
+    materialize_derived_columns,
 )
 
 try:
@@ -786,6 +787,7 @@ def main() -> None:
 
     df = pd.read_csv(args.manifest_csv)
     profile = read_json(args.profile_json) if args.profile_json and args.profile_json.exists() else None
+    materialize_derived_columns(df, profile)
     candidates = infer_columns_from_profile(df, profile)
 
     summary = build_eda_summary(

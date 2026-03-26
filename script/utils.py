@@ -216,6 +216,40 @@ def looks_like_path_value(value: Any) -> bool:
     return False
 
 
+# Derived column utilities
+
+_SEGMENT_STEM_RE = re.compile(r"^(.+)_\d+$")
+
+
+def materialize_derived_columns(
+    df: pd.DataFrame,
+    profile: Optional[Dict[str, Any]],
+) -> pd.DataFrame:
+    """
+    Create derived columns described in the manifest profile that don't yet exist in df.
+
+    Currently handles sub-identifier columns extracted from path columns that follow
+    a <PREFIX>_<int>.<ext> segmentation pattern. The derived column name and source
+    are taken from the profile's segment_pattern annotation.
+
+    Modifies df in-place and returns it for chaining.
+    """
+    if not profile:
+        return df
+    for col_profile in profile.get("column_profiles", []):
+        path_prof = col_profile.get("path_profile", {})
+        seg = path_prof.get("segment_pattern", {})
+        if not seg.get("detected"):
+            continue
+        src_col = col_profile["column_name"]
+        new_col = seg.get("suggested_grouping_column")
+        if not new_col or src_col not in df.columns or new_col in df.columns:
+            continue
+        stems = df[src_col].astype(str).apply(lambda v: Path(v).stem)
+        df[new_col] = stems.str.extract(r"^(.+)_\d+$", expand=False)
+    return df
+
+
 # Series utilities
 
 

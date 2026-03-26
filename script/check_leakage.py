@@ -41,6 +41,7 @@ from utils import (
     write_json,
     safe_float,
     normalize_name,
+    materialize_derived_columns,
 )
 
 
@@ -606,6 +607,7 @@ def main() -> None:
     args = parse_args()
     df = pd.read_csv(args.manifest_csv)
     profile = read_json(args.profile_json) if args.profile_json and args.profile_json.exists() else None
+    materialize_derived_columns(df, profile)
 
     report = build_report(df, profile)
     args.output.parent.mkdir(parents=True, exist_ok=True)
