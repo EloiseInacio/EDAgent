@@ -45,6 +45,7 @@ LABEL_HINTS = {
     "ground_truth",
     "gt",
     "annotation",
+    "category",
     "event",
     "action",
     "activity",
