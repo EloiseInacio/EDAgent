@@ -370,17 +370,56 @@ conda activate eda-agent
 python mcp_server.py
 ```
 
-## Packaging as a ChatGPT skill
+## Using with OpenAI
 
-A packaged skill should include:
+The MCP server supports an HTTP/SSE transport mode for use with the OpenAI Agents SDK and the ChatGPT desktop app. Both require the server to be running locally — the EDA scripts execute on the local filesystem and expect the manifest and asset files to be locally accessible.
 
-* `SKILL.md`
-* `agents/openai.yaml`
-* all required scripts
-* all required references
-* any lightweight assets needed for the workflow
+### Prerequisites
 
-Package the skill as `skill.zip` and upload it through the ChatGPT Skills page.
+Create and activate the conda environment (see [Environment setup](#environment-setup)), then start the MCP server in SSE mode:
+
+```bash
+conda activate eda-agent
+python mcp_server.py --transport sse --port 8000
+```
+
+The server will listen at `http://127.0.0.1:8000/sse`. Keep this process running while using the agent.
+
+### OpenAI Agents SDK
+
+Connect an MCP client to the running server and pass the system prompt from `reference/system_prompt_openai.md`:
+
+```python
+from agents import Agent, MCPServerSse
+
+async def main():
+    async with MCPServerSse(url="http://127.0.0.1:8000/sse") as mcp:
+        with open("reference/system_prompt_openai.md") as f:
+            system_prompt = f.read()
+        agent = Agent(
+            name="EDAgent",
+            instructions=system_prompt,
+            mcp_servers=[mcp],
+        )
+        # run your agent loop here
+```
+
+The agent will have access to `profile_manifest`, `run_eda`, `check_leakage`, and `read_eda_file` as tools.
+
+### ChatGPT desktop app
+
+1. Start the MCP server in SSE mode (see above).
+2. In the ChatGPT desktop app, open **Settings → MCP Servers** and add a new server with the URL `http://127.0.0.1:8000/sse`.
+3. Start a new conversation and paste the contents of `reference/system_prompt_openai.md` as the system prompt (or into the first message if system prompts are not configurable).
+4. Provide the path to your CSV manifest and the agent will follow the EDA workflow.
+
+### System prompt
+
+`reference/system_prompt_openai.md` contains the full workflow instructions for OpenAI-based clients. It consolidates intake questions, tool execution order, decision rules, epistemic discipline, and the 15-section report structure — everything that Claude Code loads automatically via MCP resources but that OpenAI clients require as an explicit system prompt.
+
+### Limitation
+
+Both integrations require the MCP server to run on the same machine as the data. Remote or cloud-hosted deployments are not supported by the current setup — the EDA scripts read files from the local filesystem only.
 
 ## Design principles
 
