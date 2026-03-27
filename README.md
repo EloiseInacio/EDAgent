@@ -310,6 +310,66 @@ python scripts/check_leakage.py data/your_manifest.csv \
   --profile-json manifest_profile.json
 ```
 
+## Using with Claude Code
+
+The agent integrates with Claude Code via an MCP server that exposes the EDA pipeline as tools and resources.
+
+### Setup
+
+1. Create and activate the conda environment (see [Environment setup](#environment-setup)).
+2. Open this project directory in Claude Code. The `.mcp.json` at the project root registers the MCP server automatically — no additional configuration is needed.
+
+### What the MCP server provides
+
+**Resources** — fetched by Claude at the start of each session:
+
+| URI | Content |
+|-----|---------|
+| `edagent://workflow` | Pipeline instructions and workflow rules |
+| `edagent://questionnaire` | Intake questions to ask before analysis |
+| `edagent://report-template` | 15-section report structure |
+
+**Tools** — called by Claude during analysis:
+
+| Tool | Step | Description |
+|------|------|-------------|
+| `profile_manifest` | 1 | Infer column roles and dataset modality, write `manifest_profile.json` |
+| `run_eda` | 2 | Compute statistics, detect outliers, generate charts, write `eda_summary.json` |
+| `check_leakage` | 3 | Detect duplicates, split overlap, proxy features, write `leakage_report.json` |
+| `read_eda_file` | any | Read any output file produced by the pipeline |
+
+### Usage
+
+With the project open in Claude Code, give Claude a CSV path or ask for a dataset analysis:
+
+```
+Analyze data/my_manifest.csv — it's a fall detection dataset with skeleton pose files.
+```
+
+Claude will:
+
+1. Fetch the workflow and questionnaire from the MCP server.
+2. Ask a short set of intake questions (up to 4 per turn), skipping anything already clear from the CSV.
+3. Call `profile_manifest`, `run_eda`, and `check_leakage` in sequence.
+4. Write the final report using the 15-section template, grounding every claim in script output.
+
+The `CLAUDE.md` in this repository encodes the workflow rules for Claude — it is read automatically and requires no manual steps.
+
+### MCP server transport
+
+The server runs over stdio via:
+
+```bash
+conda run -n eda-agent python mcp_server.py
+```
+
+This is handled automatically by `.mcp.json`. To run the server manually for debugging:
+
+```bash
+conda activate eda-agent
+python mcp_server.py
+```
+
 ## Packaging as a ChatGPT skill
 
 A packaged skill should include:
