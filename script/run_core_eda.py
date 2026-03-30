@@ -222,6 +222,52 @@ def compute_missingness(df: pd.DataFrame) -> Dict[str, Any]:
     }
 
 
+# Minimum Jaccard similarity to report a co-missing pair.
+_CO_MISSING_MIN_JACCARD = 0.5
+
+
+def compute_co_missingness(df: pd.DataFrame) -> Dict[str, Any]:
+    """Identify columns whose missing values coincide on the same rows.
+
+    For each pair of columns that both have at least one missing value, computes
+    the Jaccard similarity of their missingness masks:
+        J(A, B) = |rows where both are missing| / |rows where either is missing|
+
+    Only pairs with J >= _CO_MISSING_MIN_JACCARD are reported. A high Jaccard
+    indicates the two columns are missing for the same records, suggesting a
+    shared upstream cause (e.g., the same extraction step failing).
+    """
+    missing_cols = [col for col in df.columns if df[col].isna().any()]
+    if len(missing_cols) < 2:
+        return {"status": "ok", "columns_with_missing": missing_cols, "pairs": []}
+
+    masks = {col: df[col].isna().to_numpy() for col in missing_cols}
+    n = len(df)
+    pairs = []
+    for i in range(len(missing_cols)):
+        for j in range(i + 1, len(missing_cols)):
+            a, b = missing_cols[i], missing_cols[j]
+            both = int((masks[a] & masks[b]).sum())
+            if both == 0:
+                continue
+            either = int((masks[a] | masks[b]).sum())
+            jaccard = both / either if either > 0 else 0.0
+            if jaccard < _CO_MISSING_MIN_JACCARD:
+                continue
+            pairs.append(
+                {
+                    "col_a": str(a),
+                    "col_b": str(b),
+                    "co_missing_count": both,
+                    "co_missing_rate": round(both / n, 4),
+                    "jaccard": round(jaccard, 4),
+                }
+            )
+
+    pairs.sort(key=lambda x: x["jaccard"], reverse=True)
+    return {"status": "ok", "columns_with_missing": missing_cols, "pairs": pairs}
+
+
 def compute_label_distribution(df: pd.DataFrame, label_column: Optional[str]) -> Dict[str, Any]:
     if not label_column or label_column not in df.columns:
         return {"label_column": None, "status": "not_available"}
@@ -691,6 +737,7 @@ def build_eda_summary(
     )
 
     missingness = compute_missingness(df)
+    co_missingness = compute_co_missingness(df)
     label_distribution = compute_label_distribution(df, label_column)
     numeric_summaries, numeric_columns = summarize_numeric_columns(df, exclude_columns=exclude_from_numeric)
     outliers = detect_outliers(df, numeric_columns)
@@ -728,6 +775,7 @@ def build_eda_summary(
             "numeric_columns": numeric_columns,
         },
         "missingness": missingness,
+        "co_missingness": co_missingness,
         "missingness_by_label": missingness_by_label,
         "label_distribution": label_distribution,
         "numeric_summaries": numeric_summaries,
@@ -757,6 +805,19 @@ def build_markdown_summary(summary: Dict[str, Any]) -> str:
     lines.append(f"- Overall missing cell rate: {missingness.get('overall_missing_cell_rate', 0.0):.3f}")
     for row in missingness.get("per_column", [])[:10]:
         lines.append(f"- {row['column']}: {row['missing_rate']:.3f} ({row['missing_count']} missing)")
+    lines.append("")
+
+    co_missingness = summary.get("co_missingness", {})
+    lines.append("## Co-missingness")
+    pairs = co_missingness.get("pairs", [])
+    if pairs:
+        for p in pairs[:10]:
+            lines.append(
+                f"- {p['col_a']} & {p['col_b']}: {p['co_missing_count']} rows"
+                f" (rate={p['co_missing_rate']:.4f}, jaccard={p['jaccard']:.3f})"
+            )
+    else:
+        lines.append("- No co-missing column pairs found (Jaccard >= 0.5).")
     lines.append("")
 
     label_distribution = summary.get("label_distribution", {})
