@@ -5,6 +5,14 @@
 3. What is the target label and its granularity?
 4. What split or grouping variables should be respected?
 
+# SQL database follow-up
+
+Ask these only when the data source is a SQL database (not a CSV file):
+- What is the database type and connection string? (e.g. `sqlite:///path/to/file.db`, `postgresql://user:pass@host/dbname`)
+- Which table is the primary analysis target?
+- Are there additional tables to join? If so: which tables, which columns to join on, and what join type (inner/left)?
+- Should any rows be filtered (WHERE clause)? Should the analysis be limited to a specific column subset?
+
 # Data access follow-up
 
 Ask this only if asset files are referenced in the manifest:

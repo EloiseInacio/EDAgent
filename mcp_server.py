@@ -159,6 +159,60 @@ def check_leakage(
 
 
 @mcp.tool()
+def materialize_sql_manifest(
+    connection_string: str,
+    table: str,
+    output_dir: str = "eda_outputs",
+    joins: str = "",
+    where: str = "",
+    columns: str = "",
+    limit: int = 0,
+    output_filename: str = "sql_manifest.csv",
+) -> str:
+    """Step 0 (SQL sources only) — load SQL table(s) into a CSV manifest.
+    Run this before profile_manifest when the data source is a SQL database.
+    Returns JSON with the manifest_path to use in all subsequent pipeline steps.
+
+    connection_string: SQLAlchemy URL, e.g. sqlite:///data.db or postgresql://user:pass@host/db
+    table: primary table name to query
+    joins: JSON array of join specs, e.g. [{"table":"t2","on":"t1.id=t2.fk","type":"left"}]
+    where: optional SQL WHERE clause without the WHERE keyword
+    columns: comma-separated column names to include; empty selects all columns
+    limit: maximum rows to load (0 = no limit)
+    output_filename: name of the output CSV file written to output_dir"""
+    out_dir = Path(output_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    output_csv = out_dir / output_filename
+
+    args = [
+        str(SCRIPT_DIR / "load_sql.py"),
+        connection_string,
+        "--table", table,
+        "--output-dir", str(out_dir),
+        "--output-csv", str(output_csv),
+    ]
+    if joins:
+        try:
+            join_list = json.loads(joins)
+        except (json.JSONDecodeError, TypeError) as e:
+            return f"[ERROR] Invalid joins JSON: {e}"
+        for j in join_list:
+            args += ["--join", json.dumps(j)]
+    if where:
+        args += ["--where", where]
+    if columns:
+        args += ["--columns", columns]
+    if limit:
+        args += ["--limit", str(limit)]
+
+    rc, stdout, stderr = _run(args)
+    if rc != 0:
+        return f"[load_sql.py failed]\nstdout: {stdout}\nstderr: {stderr}"
+
+    return stdout
+
+
+@mcp.tool()
 def read_eda_file(file_path: str) -> str:
     """Read any EDA output file (JSON, markdown, chart path list, etc.)."""
     return _read_output(Path(file_path))

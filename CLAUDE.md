@@ -1,6 +1,6 @@
 # EDAgent — workflow for Claude Code
 
-This project is an EDA agent for manifest-based ML datasets. When a user gives you a CSV or asks for dataset analysis, follow the steps below exactly.
+This project is an EDA agent for manifest-based ML datasets. When a user gives you a CSV or SQL database and asks for dataset analysis, follow the steps below exactly.
 
 ## Pipeline
 
@@ -9,9 +9,16 @@ Fetch `edagent://questionnaire` and `edagent://workflow` from the MCP server bef
 
 **1. Intake (before running any script)**
 Ask the questions from `edagent://questionnaire`. Rules:
-- Skip any question already answered by the user or clearly inferable from the CSV schema.
+- Skip any question already answered by the user or clearly inferable from the data source.
 - Ask no more than 4 questions per turn.
 - Do not run scripts until you have enough context to interpret the results.
+
+**1b. Materialize SQL manifest (SQL sources only)**
+If the user provides a SQL database instead of a CSV file:
+- Ask the SQL follow-up questions from `edagent://questionnaire` (connection string, primary table, joins, filters).
+- Call `materialize_sql_manifest` with the connection details.
+- Use the `manifest_path` returned in the JSON output as the `manifest_path` argument for all subsequent steps.
+- For CSV sources, skip this step entirely — proceed directly to `profile_manifest`.
 
 **2. profile_manifest — always first**
 Run this before any other script. Use the output to:
