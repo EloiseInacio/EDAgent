@@ -461,7 +461,7 @@ def summarize_overall_risk(checks: List[Dict[str, Any]]) -> Dict[str, Any]:
     scores = {check["risk_type"]: float(check.get("severity_score", 0.0)) for check in checks}
     max_score = max(scores.values()) if scores else 0.0
     avg_score = sum(scores.values()) / max(len(scores), 1)
-    overall = max(max_score, min(avg_score + 0.1, 1.0))
+    overall = max_score if max_score == 0.0 else max(max_score, min(avg_score + 0.1, 1.0))
     return {
         "overall_severity_score": round(overall, 3),
         "overall_risk_level": classify_risk(overall),

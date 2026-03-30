@@ -284,6 +284,9 @@ def summarize_numeric_columns(df: pd.DataFrame, exclude_columns: List[str]) -> T
     return summaries, numeric_columns
 
 
+_NEAR_CONSTANT_IQR_RATIO = 1e-6
+
+
 def detect_outliers(df: pd.DataFrame, numeric_columns: List[str]) -> Dict[str, Any]:
     outlier_summary = []
 
@@ -295,6 +298,11 @@ def detect_outliers(df: pd.DataFrame, numeric_columns: List[str]) -> Dict[str, A
         q3 = float(numeric.quantile(0.75))
         iqr = q3 - q1
         if iqr == 0:
+            continue
+        # Skip near-constant columns: IQR negligible relative to the column's scale.
+        # Prevents absurdly tight Tukey fences that flag normal values as outliers.
+        data_scale = max(abs(q1), abs(q3), 1e-9)
+        if iqr / data_scale < _NEAR_CONSTANT_IQR_RATIO:
             continue
         lower = q1 - 1.5 * iqr
         upper = q3 + 1.5 * iqr
