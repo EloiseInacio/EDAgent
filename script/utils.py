@@ -35,6 +35,11 @@ PATH_HINTS = {
     "json_path",
     "npz_path",
     "npy_path",
+    "audio",
+    "sound",
+    "recording",
+    "speech",
+    "waveform",
 }
 
 LABEL_HINTS = {
@@ -81,6 +86,9 @@ TEMPORAL_HINTS = {
     "duration",
     "clip_id",
     "sequence_id",
+    "sample_rate",
+    "sr",
+    "n_samples",
 }
 
 ID_HINTS = {
@@ -96,7 +104,8 @@ ID_HINTS = {
 
 KNOWN_FILE_EXTENSIONS = {
     ".csv", ".json", ".jsonl", ".mp4", ".avi", ".mov", ".mkv", ".jpg", ".jpeg", ".png",
-    ".bmp", ".webp", ".npy", ".npz", ".pkl", ".pickle", ".txt", ".tsv", ".parquet", ".wav",
+    ".bmp", ".webp", ".npy", ".npz", ".pkl", ".pickle", ".txt", ".tsv", ".parquet",
+    ".wav", ".mp3", ".flac", ".ogg", ".m4a", ".aac",
 }
 
 

@@ -77,12 +77,19 @@ try:
 except Exception:
     HAS_TEXT_HELPERS = False
 
+try:
+    from extract_audio_meta import get_audio_metadata  # type: ignore
+    HAS_AUDIO_HELPERS = True
+except Exception:
+    HAS_AUDIO_HELPERS = False
+
 warnings.filterwarnings("ignore", category=RuntimeWarning)
 
 
 DEFAULT_MAX_ASSET_ROWS = 50
 DEFAULT_TOP_N = 20
 TEXT_FILE_SUFFIXES = {".txt", ".md", ".log", ".json", ".jsonl", ".csv", ".tsv"}
+AUDIO_FILE_SUFFIXES = {".wav", ".mp3", ".flac", ".ogg", ".m4a", ".aac"}
 TEXT_COLUMN_HINTS = {
     "text",
     "transcript",
@@ -450,6 +457,7 @@ def derive_asset_metadata(
         "video_helpers_available": HAS_VIDEO_HELPERS,
         "skeleton_helpers_available": HAS_SKELETON_HELPERS,
         "text_helpers_available": HAS_TEXT_HELPERS,
+        "audio_helpers_available": HAS_AUDIO_HELPERS,
         "sampled_rows": 0,
         "derived_columns": [],
         "notes": [],
@@ -607,9 +615,38 @@ def derive_asset_metadata(
                 results["derived_columns"].extend([c for c in derived.columns if c not in {"row_index", "source_column", "source_type", "path"}])
                 results["notes"].append(f"Derived text metadata from path column '{path_col}'.")
 
+        if suffixes & AUDIO_FILE_SUFFIXES and HAS_AUDIO_HELPERS:
+            rows = []
+            for idx, value in sampled[path_col].items():
+                if pd.isna(value):
+                    continue
+                p = Path(str(value)).expanduser()
+                if not p.is_absolute() and base_path is not None and not p.exists():
+                    p = base_path / p.name
+                if not p.exists():
+                    continue
+                row: Dict[str, Any] = {
+                    "row_index": int(idx),
+                    "source_column": path_col,
+                    "source_type": "audio_path",
+                    "path": str(p),
+                }
+                try:
+                    row.update(get_audio_metadata(str(p)))
+                except Exception as exc:
+                    row["audio_error"] = str(exc)
+                rows.append(row)
+            if rows:
+                derived = pd.DataFrame(rows)
+                derived_frames.append(derived)
+                results["derived_columns"].extend(
+                    [c for c in derived.columns if c not in {"row_index", "source_column", "source_type", "path"}]
+                )
+                results["notes"].append(f"Derived audio metadata from column '{path_col}'.")
+
     if not derived_frames:
         results["status"] = "not_available"
-        if not HAS_VIDEO_HELPERS and not HAS_SKELETON_HELPERS and not HAS_TEXT_HELPERS:
+        if not HAS_VIDEO_HELPERS and not HAS_SKELETON_HELPERS and not HAS_TEXT_HELPERS and not HAS_AUDIO_HELPERS:
             results["notes"].append("Helper modules are unavailable; skipping asset-level metadata extraction.")
         else:
             results["notes"].append("No accessible assets were successfully profiled.")

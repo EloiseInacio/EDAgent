@@ -282,9 +282,12 @@ def infer_dataset_modality(column_profiles: List[Dict[str, Any]]) -> Dict[str, A
         if extensions & {".jpg", ".jpeg", ".png", ".bmp", ".webp"}:
             score["image"] += 2
             evidence.append(f"column '{profile['column_name']}' references image files")
-        if extensions & {".wav"}:
+        if extensions & {".wav", ".mp3", ".flac", ".ogg", ".m4a", ".aac"}:
             score["audio"] += 2
             evidence.append(f"column '{profile['column_name']}' references audio files")
+        if {"audio", "sound", "recording", "speech", "waveform"} & set(name.split("_")):
+            score["audio"] += 1
+            evidence.append(f"column '{profile['column_name']}' name suggests audio data")
         if profile["inferred_role"] == "temporal field" and name in {"fps", "duration", "timestamp"}:
             score["temporal/sequential"] += 1
             evidence.append(f"column '{profile['column_name']}' suggests sequential data")

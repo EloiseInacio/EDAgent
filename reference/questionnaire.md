@@ -22,3 +22,12 @@ Ask this only if asset files are referenced in the manifest:
 
 Ask this only if relevant:
 - Are metadata detector-generated or manually annotated?
+
+# Audio data follow-up
+
+Ask these only when audio data is detected:
+- Is the audio speech, music, environmental sound, or mixed?
+- What is the expected sample rate (e.g. 8 kHz telephony, 16 kHz speech, 44.1 kHz music)?
+- Is audio mono or stereo? Should channels be analyzed independently?
+- What type of annotation is provided: event labels, transcripts, continuous scores, or binary flags?
+- Are there known recording conditions (microphone type, noise level) that may introduce domain-specific bias?

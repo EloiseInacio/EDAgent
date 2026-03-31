@@ -210,6 +210,18 @@ Consider:
 - missing windows
 - channel-wise anomalies
 
+### For audio datasets
+Consider:
+- duration distribution across clips
+- sample rate consistency across files
+- mono vs. stereo and channel count variation
+- RMS energy distribution (loudness variation within and across classes)
+- silence ratio (high values may indicate annotation misalignment or mic issues)
+- clipping ratio (values near 1.0 indicate recording overload)
+- spectral centroid by class (useful for speech vs. music vs. noise separation)
+- zero-crossing rate distribution (high for noisy/fricative speech, low for tonal audio)
+- spectral bandwidth variation per class
+
 Rules:
 - Only include analyses that are justified by the data
 - State when a modality-specific check could not be performed

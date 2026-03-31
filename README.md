@@ -74,6 +74,7 @@ When supported by the manifest and accessible files, the agent can enrich EDA us
 * video metadata
 * skeleton, bbox, fps, and motion metadata
 * text metadata
+* audio metadata
 
 ### Report generation
 
@@ -207,6 +208,18 @@ Example use cases:
 * readability proxies
 * simple label-keyword overlap heuristics
 
+### `extract_audio_meta.py`
+
+Used for audio metadata extraction.
+
+Example use cases:
+
+* duration and sample rate consistency
+* RMS energy and dynamic range
+* spectral centroid, bandwidth, and rolloff
+* zero-crossing rate
+* silence ratio and clipping ratio
+
 ## Workflow
 
 The agent follows this high-level workflow:
@@ -217,7 +230,7 @@ The agent follows this high-level workflow:
 4. Run `scripts/profile_manifest.py` to create `manifest_profile.json`.
 5. Use the manifest profile to decide which modality-specific analyses are supported.
 6. Run `scripts/run_core_eda.py` using the manifest and `manifest_profile.json`.
-7. When relevant and accessible, let `run_core_eda.py` call helper extractors for video, skeleton, or text metadata.
+7. When relevant and accessible, let `run_core_eda.py` call helper extractors for video, skeleton, text, or audio metadata.
 8. Run `scripts/check_leakage.py` using the manifest and `manifest_profile.json`.
 9. Generate the final report using `references/report-template.md`.
 10. Ground conclusions in script outputs and explicitly state any limitations.
@@ -231,6 +244,7 @@ The agent is currently best suited for:
 * structured video or motion datasets
 * skeleton / bbox / fps metadata workflows
 * text datasets with inline text columns or text file paths
+* audio datasets with clip-level manifests (.wav, .mp3, .flac, .ogg, .m4a, .aac)
 * supervised learning settings where label balance and leakage matter
 
 ## Example use cases
@@ -264,6 +278,21 @@ Useful checks:
 * repetitive or noisy samples
 * label imbalance
 * label tokens appearing directly in text or path structure
+
+### Audio classification dataset
+
+Input:
+
+* CSV manifest with paths to audio clips (.wav, .flac, .mp3, etc.)
+* label, split, and optional speaker/environment grouping columns
+
+Useful checks:
+
+* clip duration distribution and sample rate consistency
+* silence ratio and clipping ratio by class
+* spectral centroid or ZCR differences across classes
+* speaker or environment overlap across splits
+* filename tokens that encode the label
 
 ## Environment setup
 
@@ -470,4 +499,4 @@ The agent may be limited when:
 
 ## License and usage
 
-Adapt this agent to your own workflows, datasets, and domain-specific checks. The current version is a strong starting point for manifest-based EDA in computer vision, motion analysis, and text-heavy pipelines.
+Adapt this agent to your own workflows, datasets, and domain-specific checks. The current version is a strong starting point for manifest-based EDA in computer vision, motion analysis, text-heavy, and audio pipelines.
