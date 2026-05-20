@@ -45,10 +45,12 @@ Include:
 - detected label columns
 - detected grouping or split columns
 - inferred modality from filenames, schema, and user context
+- detected hierarchical structure (e.g. subject → session → clip nesting, or directory-level nesting in path values) — include chain, depth, and avg children per parent if detected; omit this bullet if no hierarchy was found
 
 Suggested commentary:
 - Explain what one row likely represents
 - Mention whether the dataset appears frame-level, clip-level, sequence-level, or mixed
+- If hierarchy is detected, describe what it implies for split design and leakage risk
 
 ---
 

@@ -226,6 +226,166 @@ def _detect_segment_pattern(
     }
 
 
+def _nesting_purity(parent: pd.Series, child: pd.Series) -> float:
+    """Fraction of unique child values that map to exactly one parent value."""
+    non_null = parent.notna() & child.notna()
+    if non_null.sum() < 10:
+        return 0.0
+    df_pair = pd.DataFrame({"p": parent[non_null], "c": child[non_null]})
+    child_to_parent_count = df_pair.groupby("c")["p"].nunique()
+    pure = int((child_to_parent_count == 1).sum())
+    return pure / max(len(child_to_parent_count), 1)
+
+
+def _build_hierarchy_chain(nesting_pairs: List[Dict[str, Any]]) -> List[str]:
+    """Return the longest linear chain extractable from the nesting pairs."""
+    if not nesting_pairs:
+        return []
+
+    children_of: Dict[str, List[str]] = {}
+    has_parent: set = set()
+    for pair in nesting_pairs:
+        p, c = pair["parent"], pair["child"]
+        children_of.setdefault(p, []).append(c)
+        has_parent.add(c)
+
+    all_parents = {p["parent"] for p in nesting_pairs}
+    roots = all_parents - has_parent or {nesting_pairs[0]["parent"]}
+
+    def longest_path(node: str) -> List[str]:
+        if node not in children_of:
+            return [node]
+        best: List[str] = []
+        for child in children_of[node]:
+            path = longest_path(child)
+            if len(path) > len(best):
+                best = path
+        return [node] + best
+
+    best: List[str] = []
+    for root in roots:
+        chain = longest_path(root)
+        if len(chain) > len(best):
+            best = chain
+    return best
+
+
+def _detect_path_directory_hierarchy(
+    series: pd.Series, min_ratio: float = 2.0
+) -> Optional[Dict[str, Any]]:
+    """
+    Detect whether path values encode a directory hierarchy.
+
+    Parses directory parts (excluding the filename) of up to 500 sampled path
+    values and checks whether unique counts at successive depth levels increase
+    monotonically with a ratio >= min_ratio (coarser parent, finer child).
+    """
+    sample = series.dropna().astype(str).head(500).tolist()
+    if not sample:
+        return None
+
+    depth_sets: Dict[int, set] = {}
+    for val in sample:
+        dirs = Path(val).parts[:-1]  # exclude the filename itself
+        for depth, part in enumerate(dirs):
+            depth_sets.setdefault(depth, set()).add(part)
+
+    if not depth_sets or max(depth_sets.keys()) < 1:
+        return None
+
+    depths = sorted(depth_sets.keys())
+    level_counts = [len(depth_sets[d]) for d in depths]
+
+    if len(level_counts) < 2:
+        return None
+
+    is_hierarchical = level_counts[-1] > level_counts[0] * min_ratio and all(
+        level_counts[i + 1] >= level_counts[i] for i in range(len(level_counts) - 1)
+    )
+    if not is_hierarchical:
+        return None
+
+    example = next((v for v in sample if len(Path(v).parts) > 2), sample[0])
+    return {
+        "detected": True,
+        "max_directory_depth": max(depths) + 1,
+        "unique_counts_per_depth_level": level_counts,
+        "example_value": example,
+    }
+
+
+_NESTING_PURITY_THRESHOLD = 0.95
+
+
+def detect_hierarchical_structure(
+    df: pd.DataFrame,
+    candidate_columns: Dict[str, List[str]],
+) -> Dict[str, Any]:
+    """
+    Detect hierarchical nesting structure in the manifest.
+
+    Column hierarchy: tests whether identifier/grouping columns form a
+    parent-child nesting (each child value belongs to exactly one parent value,
+    e.g. session_id nested within subject_id).
+
+    Path hierarchy: checks whether the directory parts of path-column values
+    encode nesting levels (e.g. subject_01/session_02/clip.mp4).
+    """
+    hierarchy_cols = list(
+        dict.fromkeys(
+            candidate_columns.get("identifier_columns", [])
+            + candidate_columns.get("grouping_columns", [])
+        )
+    )
+    hierarchy_cols = [
+        c for c in hierarchy_cols
+        if c in df.columns and 2 <= df[c].nunique(dropna=True) <= len(df) * 0.9
+    ]
+
+    nesting_pairs: List[Dict[str, Any]] = []
+    for i, col_a in enumerate(hierarchy_cols):
+        for col_b in hierarchy_cols[i + 1:]:
+            n_a = df[col_a].nunique(dropna=True)
+            n_b = df[col_b].nunique(dropna=True)
+            if n_a == n_b:
+                continue
+            parent_col, child_col = (col_a, col_b) if n_a < n_b else (col_b, col_a)
+            n_parent = min(n_a, n_b)
+            n_child = max(n_a, n_b)
+            purity = _nesting_purity(df[parent_col], df[child_col])
+            if purity < _NESTING_PURITY_THRESHOLD:
+                continue
+            nesting_pairs.append({
+                "parent": parent_col,
+                "child": child_col,
+                "parent_unique_count": n_parent,
+                "child_unique_count": n_child,
+                "avg_children_per_parent": round(n_child / max(n_parent, 1), 2),
+                "nesting_purity": round(purity, 3),
+            })
+
+    chain = _build_hierarchy_chain(nesting_pairs)
+    col_hierarchy: Dict[str, Any] = {"detected": bool(nesting_pairs)}
+    if nesting_pairs:
+        col_hierarchy["nesting_pairs"] = nesting_pairs
+        col_hierarchy["chain"] = chain
+        col_hierarchy["depth"] = len(chain)
+
+    path_hierarchy: Dict[str, Any] = {"detected": False}
+    for path_col in [c for c in candidate_columns.get("path_columns", []) if c in df.columns]:
+        result = _detect_path_directory_hierarchy(df[path_col])
+        if result is not None:
+            result["column"] = path_col
+            path_hierarchy = result
+            break
+
+    return {
+        "detected": col_hierarchy["detected"] or path_hierarchy.get("detected", False),
+        "column_hierarchy": col_hierarchy,
+        "path_hierarchy": path_hierarchy,
+    }
+
+
 def profile_path_column(series: pd.Series, check_exists: bool, base_path: Optional[Path] = None) -> Dict[str, Any]:
     non_null = series.dropna()
     extensions = Counter()
@@ -363,6 +523,7 @@ def build_profile(df: pd.DataFrame, source_path: Path, sample_size: int, check_e
         column_profiles.append(profile)
 
     modality = infer_dataset_modality(column_profiles)
+    hierarchy = detect_hierarchical_structure(df, candidate_columns)
 
     duplicate_row_count = int(df.duplicated().sum())
     duplicate_summary: Dict[str, Any] = {
@@ -381,6 +542,7 @@ def build_profile(df: pd.DataFrame, source_path: Path, sample_size: int, check_e
         "columns": [str(c) for c in df.columns.tolist()],
         "candidate_columns": candidate_columns,
         "dataset_modality": modality,
+        "hierarchy_analysis": hierarchy,
         "dataset_level_summary": {
             "fully_missing_columns": [str(c) for c in df.columns[df.isna().all()].tolist()],
             "constant_columns": [str(c) for c in df.columns[df.nunique(dropna=False) <= 1].tolist()],
