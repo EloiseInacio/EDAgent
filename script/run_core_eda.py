@@ -346,6 +346,174 @@ def detect_rare_classes(
     }
 
 
+_LABEL_NOISE_MIN_CLASS_SIZE = 10
+
+
+def _conflicting_path_labels(
+    df: pd.DataFrame,
+    label_column: str,
+    path_columns: List[str],
+) -> Dict[str, Any]:
+    if not path_columns:
+        return {"status": "not_available", "note": "no path columns"}
+
+    conflicts = []
+    for path_col in path_columns:
+        if path_col not in df.columns:
+            continue
+        grouped = (
+            df[[path_col, label_column]]
+            .dropna(subset=[path_col])
+            .astype({path_col: str, label_column: str})
+            .groupby(path_col)[label_column]
+            .nunique()
+        )
+        conflicting_paths = grouped[grouped > 1].index.tolist()
+        for path in conflicting_paths[:20]:
+            labels = (
+                df.loc[df[path_col].astype(str) == path, label_column]
+                .dropna()
+                .astype(str)
+                .unique()
+                .tolist()
+            )
+            conflicts.append({"path_column": path_col, "path": path, "labels": labels})
+
+    return {
+        "status": "ok",
+        "conflict_count": len(conflicts),
+        "examples": conflicts[:20],
+    }
+
+
+def _intra_group_inconsistency(
+    df: pd.DataFrame,
+    label_column: str,
+    grouping_columns: List[str],
+) -> List[Dict[str, Any]]:
+    results = []
+    for group_col in grouping_columns:
+        if group_col not in df.columns:
+            continue
+        sub = (
+            df[[group_col, label_column]]
+            .dropna(subset=[label_column])
+            .astype({group_col: str, label_column: str})
+        )
+        group_counts = sub.groupby([group_col, label_column]).size().rename("count").reset_index()
+        total_per_group = group_counts.groupby(group_col)["count"].sum()
+        mixed_groups = group_counts.groupby(group_col)[label_column].nunique()
+        mixed_group_values = mixed_groups[mixed_groups > 1].index.tolist()
+
+        noise_candidate_count = 0
+        examples = []
+        for gv in mixed_group_values:
+            rows = group_counts[group_counts[group_col] == gv].sort_values("count", ascending=False)
+            dominant_label = rows.iloc[0][label_column]
+            dominant_count = int(rows.iloc[0]["count"])
+            total = int(total_per_group[gv])
+            minority_rows = rows.iloc[1:]
+            minority_count = int(minority_rows["count"].sum())
+            noise_candidate_count += minority_count
+            if len(examples) < 10:
+                examples.append(
+                    {
+                        "group_value": str(gv),
+                        "dominant_label": dominant_label,
+                        "dominant_count": dominant_count,
+                        "minority_label_count": minority_count,
+                        "total_in_group": total,
+                        "minority_labels": minority_rows[label_column].tolist(),
+                    }
+                )
+
+        total_groups = int(mixed_groups.shape[0])
+        n = len(sub)
+        results.append(
+            {
+                "group_column": str(group_col),
+                "total_group_count": total_groups,
+                "mixed_group_count": len(mixed_group_values),
+                "mixed_group_rate": round(len(mixed_group_values) / total_groups, 4) if total_groups else 0.0,
+                "noise_candidate_count": noise_candidate_count,
+                "noise_candidate_rate": round(noise_candidate_count / n, 4) if n else 0.0,
+                "examples": examples,
+            }
+        )
+    return results
+
+
+def _class_conditional_outliers(
+    df: pd.DataFrame,
+    label_column: str,
+    numeric_columns: List[str],
+) -> Dict[str, Any]:
+    label_series = df[label_column].dropna().astype(str)
+    classes = label_series.value_counts()
+    eligible_classes = classes[classes >= _LABEL_NOISE_MIN_CLASS_SIZE].index.tolist()
+
+    if len(eligible_classes) < 2 or not numeric_columns:
+        return {"status": "not_available", "note": "need >= 2 classes with >= 10 samples each"}
+
+    candidates_per_column = []
+    total_candidates = 0
+
+    for col in numeric_columns:
+        numeric = pd.to_numeric(df[col], errors="coerce")
+        col_candidates = 0
+        for cls in eligible_classes:
+            mask_cls = label_series == cls
+            vals = numeric[mask_cls & numeric.notna()]
+            if len(vals) < _LABEL_NOISE_MIN_CLASS_SIZE:
+                continue
+            q1 = float(vals.quantile(0.25))
+            q3 = float(vals.quantile(0.75))
+            iqr = q3 - q1
+            if iqr == 0:
+                continue
+            lower = q1 - 1.5 * iqr
+            upper = q3 + 1.5 * iqr
+            outlier_mask = mask_cls & ((numeric < lower) | (numeric > upper))
+            col_candidates += int(outlier_mask.fillna(False).sum())
+        if col_candidates > 0:
+            n = int(numeric.notna().sum())
+            candidates_per_column.append(
+                {
+                    "column": str(col),
+                    "candidate_count": col_candidates,
+                    "candidate_rate": round(col_candidates / n, 4) if n else 0.0,
+                }
+            )
+        total_candidates += col_candidates
+
+    candidates_per_column.sort(key=lambda x: x["candidate_rate"], reverse=True)
+    return {
+        "status": "ok",
+        "total_candidates": total_candidates,
+        "total_candidate_rate": round(total_candidates / max(len(df), 1), 4),
+        "candidates_per_column": candidates_per_column,
+    }
+
+
+def compute_label_noise_heuristics(
+    df: pd.DataFrame,
+    label_column: Optional[str],
+    grouping_columns: List[str],
+    path_columns: List[str],
+    numeric_columns: List[str],
+) -> Dict[str, Any]:
+    if not label_column or label_column not in df.columns:
+        return {"label_column": None, "status": "not_available"}
+
+    return {
+        "label_column": label_column,
+        "status": "ok",
+        "conflicting_path_labels": _conflicting_path_labels(df, label_column, path_columns),
+        "intra_group_inconsistency": _intra_group_inconsistency(df, label_column, grouping_columns),
+        "class_conditional_outliers": _class_conditional_outliers(df, label_column, numeric_columns),
+    }
+
+
 def summarize_numeric_columns(df: pd.DataFrame, exclude_columns: List[str]) -> Tuple[List[Dict[str, Any]], List[str]]:
     summaries: List[Dict[str, Any]] = []
     numeric_columns: List[str] = []
@@ -820,6 +988,13 @@ def build_eda_summary(
     outliers = detect_outliers(df, numeric_columns)
     grouped_labels = grouped_label_distribution(df, label_column, grouping_columns)
     missingness_by_label = analyze_missingness_by_label(df, label_column)
+    label_noise = compute_label_noise_heuristics(
+        df,
+        label_column=label_column,
+        grouping_columns=grouping_columns,
+        path_columns=path_columns_from_candidates(candidates, df),
+        numeric_columns=numeric_columns,
+    )
 
     charts = {
         "missingness_by_column": plot_missingness(missingness, output_dir),
@@ -859,6 +1034,7 @@ def build_eda_summary(
         "numeric_summaries": numeric_summaries,
         "outlier_summary": outliers,
         "grouped_label_distribution": grouped_labels,
+        "label_noise_heuristics": label_noise,
         "asset_metadata": asset_metadata,
         "derived_asset_summary": derived_asset_summary,
         "charts": charts,
@@ -921,6 +1097,32 @@ def build_markdown_summary(summary: Dict[str, Any]) -> str:
         )
         for r in rare_list[:20]:
             lines.append(f"  - {r['label']}: {r['count']} samples ({r['proportion']:.4f})")
+    else:
+        lines.append("- Not available")
+    lines.append("")
+
+    noise = summary.get("label_noise_heuristics", {})
+    lines.append("## Label noise heuristics")
+    if noise.get("status") == "ok":
+        cp = noise.get("conflicting_path_labels", {})
+        if cp.get("status") == "ok":
+            lines.append(f"- Conflicting path labels: {cp['conflict_count']} paths assigned multiple labels")
+        ig = noise.get("intra_group_inconsistency", [])
+        for g in ig:
+            lines.append(
+                f"- Intra-group inconsistency [{g['group_column']}]:"
+                f" {g['mixed_group_count']}/{g['total_group_count']} mixed groups,"
+                f" {g['noise_candidate_count']} noise candidates ({g['noise_candidate_rate']:.3f})"
+            )
+        cc = noise.get("class_conditional_outliers", {})
+        if cc.get("status") == "ok":
+            lines.append(
+                f"- Class-conditional outliers: {cc['total_candidates']} candidates"
+                f" across {len(cc['candidates_per_column'])} columns"
+                f" (rate={cc['total_candidate_rate']:.3f})"
+            )
+            for row in cc["candidates_per_column"][:5]:
+                lines.append(f"  - {row['column']}: {row['candidate_count']} ({row['candidate_rate']:.3f})")
     else:
         lines.append("- Not available")
     lines.append("")
