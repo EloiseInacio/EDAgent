@@ -80,6 +80,22 @@ Commentary requirements:
 - Call out ambiguous columns
 - Note columns that may encode shortcuts or leakage
 
+Schema inconsistency flags:
+- Include a sub-section listing all entries from `schema_inconsistencies` in the profile output
+- Group by severity: **high** → **medium** → **low**
+- For each flag report: column name, issue type, description, and recommended action
+- If `schema_inconsistencies` is empty, state explicitly: "No schema inconsistencies detected"
+
+Issue types and recommended actions:
+| Issue | Recommended action |
+|---|---|
+| `fully_missing` | Drop or investigate source — column cannot contribute to modeling |
+| `non_unique_identifier` | Verify whether column is truly an ID or a grouping key; check for duplicates |
+| `numeric_stored_as_string` | Cast to numeric dtype before any statistical analysis or feature engineering |
+| `mixed_file_extensions` | Audit path column for asset heterogeneity; may signal pipeline errors |
+| `ambiguous_role` | Manually confirm the column's semantic role before using in splits or as a target |
+| `constant_column` | Drop from feature set; confirm it is not a placeholder for a missing field |
+
 ---
 
 ## 5. Data Access and Integrity Checks

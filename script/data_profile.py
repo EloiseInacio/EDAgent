@@ -424,6 +424,116 @@ def profile_path_column(series: pd.Series, check_exists: bool, base_path: Option
     return result
 
 
+def detect_schema_inconsistencies(
+    column_profiles: List[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    """
+    Scan column profiles for schema patterns that are inconsistent or suspicious.
+
+    Checks performed per column:
+    - Numeric values stored as a string dtype
+    - Path columns with heterogeneous file extensions (no dominant format)
+    - Low-confidence role inference (role assigned but poorly supported)
+    - Identifier columns that are not actually unique
+    - Fully missing columns
+    - Constant (single-value) columns
+    """
+    flags: List[Dict[str, Any]] = []
+
+    for profile in column_profiles:
+        col = profile["column_name"]
+
+        # Numeric stored as string
+        if profile["basic_dtype"] == "string":
+            num = profile.get("numeric_summary")
+            if num and num.get("numeric_parse_coverage", 0.0) > 0.95:
+                flags.append({
+                    "column": col,
+                    "issue": "numeric_stored_as_string",
+                    "severity": "medium",
+                    "description": (
+                        f"'{col}' contains numeric values but is stored as a string column "
+                        f"(parse coverage {num['numeric_parse_coverage']:.0%}). "
+                        "Consider casting to a numeric dtype."
+                    ),
+                })
+
+        # Path column with mixed file extensions
+        path_prof = profile.get("path_profile")
+        if path_prof:
+            extensions = path_prof.get("extensions", {})
+            if len(extensions) > 1:
+                total = sum(extensions.values())
+                dominant_share = max(extensions.values()) / total if total else 1.0
+                if dominant_share < 0.9:
+                    top = dict(sorted(extensions.items(), key=lambda x: -x[1])[:5])
+                    flags.append({
+                        "column": col,
+                        "issue": "mixed_file_extensions",
+                        "severity": "medium",
+                        "description": (
+                            f"Path column '{col}' has {len(extensions)} different file extensions "
+                            f"with no dominant format (largest share: {dominant_share:.0%}). "
+                            f"Top extensions: {top}."
+                        ),
+                    })
+
+        # Low-confidence role inference
+        if (
+            profile["interpretation_confidence"] < 0.4
+            and profile["inferred_role"] != "unknown"
+        ):
+            flags.append({
+                "column": col,
+                "issue": "ambiguous_role",
+                "severity": "low",
+                "description": (
+                    f"'{col}' was assigned role '{profile['inferred_role']}' with low confidence "
+                    f"({profile['interpretation_confidence']:.2f}). Verify interpretation before use."
+                ),
+            })
+
+        # Identifier column that is not actually unique
+        if profile["inferred_role"] == "identifier":
+            non_null = profile["non_null_count"]
+            unique = profile["unique_count"]
+            if non_null > 0 and unique / non_null < 0.9:
+                flags.append({
+                    "column": col,
+                    "issue": "non_unique_identifier",
+                    "severity": "high",
+                    "description": (
+                        f"'{col}' is inferred as an identifier but only "
+                        f"{unique / non_null:.0%} of non-null values are unique "
+                        f"({unique} unique out of {non_null} non-null). "
+                        "May be a grouping key or contain duplicates."
+                    ),
+                })
+
+        # Fully missing column
+        if profile["missing_rate"] == 1.0:
+            flags.append({
+                "column": col,
+                "issue": "fully_missing",
+                "severity": "high",
+                "description": f"'{col}' is entirely missing (100% null rate).",
+            })
+
+        # Constant column (non-empty, single distinct value)
+        elif profile["unique_count"] == 1 and profile["non_null_count"] > 0:
+            flags.append({
+                "column": col,
+                "issue": "constant_column",
+                "severity": "low",
+                "description": (
+                    f"'{col}' has only one distinct value across all rows — "
+                    "likely uninformative or a recording artifact."
+                ),
+            })
+
+    return flags
+
+
 def infer_dataset_modality(column_profiles: List[Dict[str, Any]]) -> Dict[str, Any]:
     score = Counter()
     evidence: List[str] = []
@@ -524,6 +634,7 @@ def build_profile(df: pd.DataFrame, source_path: Path, sample_size: int, check_e
 
     modality = infer_dataset_modality(column_profiles)
     hierarchy = detect_hierarchical_structure(df, candidate_columns)
+    schema_inconsistencies = detect_schema_inconsistencies(column_profiles)
 
     duplicate_row_count = int(df.duplicated().sum())
     duplicate_summary: Dict[str, Any] = {
@@ -543,6 +654,7 @@ def build_profile(df: pd.DataFrame, source_path: Path, sample_size: int, check_e
         "candidate_columns": candidate_columns,
         "dataset_modality": modality,
         "hierarchy_analysis": hierarchy,
+        "schema_inconsistencies": schema_inconsistencies,
         "dataset_level_summary": {
             "fully_missing_columns": [str(c) for c in df.columns[df.isna().all()].tolist()],
             "constant_columns": [str(c) for c in df.columns[df.nunique(dropna=False) <= 1].tolist()],
