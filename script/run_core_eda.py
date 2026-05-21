@@ -88,6 +88,8 @@ warnings.filterwarnings("ignore", category=RuntimeWarning)
 
 DEFAULT_MAX_ASSET_ROWS = 50
 DEFAULT_TOP_N = 20
+RARE_CLASS_PROPORTION_THRESHOLD = 0.01
+RARE_CLASS_COUNT_THRESHOLD = 5
 TEXT_FILE_SUFFIXES = {".txt", ".md", ".log", ".json", ".jsonl", ".csv", ".tsv"}
 AUDIO_FILE_SUFFIXES = {".wav", ".mp3", ".flac", ".ogg", ".m4a", ".aac"}
 TEXT_COLUMN_HINTS = {
@@ -304,6 +306,43 @@ def compute_label_distribution(df: pd.DataFrame, label_column: Optional[str]) ->
         "missing_label_count": int(series.isna().sum()),
         "distribution": distribution,
         "imbalance_ratio": imbalance_ratio,
+    }
+
+
+def detect_rare_classes(
+    df: pd.DataFrame,
+    label_column: Optional[str],
+    proportion_threshold: float = RARE_CLASS_PROPORTION_THRESHOLD,
+    count_threshold: int = RARE_CLASS_COUNT_THRESHOLD,
+) -> Dict[str, Any]:
+    if not label_column or label_column not in df.columns:
+        return {"label_column": None, "status": "not_available"}
+
+    series = df[label_column].dropna().astype(str)
+    if series.empty:
+        return {"label_column": label_column, "status": "not_available"}
+
+    total = len(series)
+    counts = series.value_counts(dropna=True)
+    rare = [
+        {
+            "label": str(label),
+            "count": int(count),
+            "proportion": round(float(count / total), 6),
+        }
+        for label, count in counts.items()
+        if count < count_threshold or (count / total) < proportion_threshold
+    ]
+    rare.sort(key=lambda x: x["count"])
+
+    return {
+        "label_column": label_column,
+        "status": "ok",
+        "rare_proportion_threshold": proportion_threshold,
+        "rare_count_threshold": count_threshold,
+        "total_class_count": int(len(counts)),
+        "rare_class_count": len(rare),
+        "rare_classes": rare,
     }
 
 
@@ -776,6 +815,7 @@ def build_eda_summary(
     missingness = compute_missingness(df)
     co_missingness = compute_co_missingness(df)
     label_distribution = compute_label_distribution(df, label_column)
+    rare_classes = detect_rare_classes(df, label_column)
     numeric_summaries, numeric_columns = summarize_numeric_columns(df, exclude_columns=exclude_from_numeric)
     outliers = detect_outliers(df, numeric_columns)
     grouped_labels = grouped_label_distribution(df, label_column, grouping_columns)
@@ -815,6 +855,7 @@ def build_eda_summary(
         "co_missingness": co_missingness,
         "missingness_by_label": missingness_by_label,
         "label_distribution": label_distribution,
+        "rare_classes": rare_classes,
         "numeric_summaries": numeric_summaries,
         "outlier_summary": outliers,
         "grouped_label_distribution": grouped_labels,
@@ -864,6 +905,22 @@ def build_markdown_summary(summary: Dict[str, Any]) -> str:
             lines.append(f"- {row['label']}: {row['count']} ({row['proportion']:.3f})")
         if label_distribution.get("imbalance_ratio") is not None:
             lines.append(f"- Imbalance ratio: {label_distribution['imbalance_ratio']:.3f}")
+    else:
+        lines.append("- Not available")
+    lines.append("")
+
+    rare_classes = summary.get("rare_classes", {})
+    lines.append("## Rare classes")
+    if rare_classes.get("status") == "ok":
+        rare_list = rare_classes.get("rare_classes", [])
+        total = rare_classes.get("total_class_count", 0)
+        lines.append(
+            f"- {rare_classes['rare_class_count']} of {total} classes are rare"
+            f" (proportion < {rare_classes['rare_proportion_threshold']}"
+            f" or count < {rare_classes['rare_count_threshold']})"
+        )
+        for r in rare_list[:20]:
+            lines.append(f"  - {r['label']}: {r['count']} samples ({r['proportion']:.4f})")
     else:
         lines.append("- Not available")
     lines.append("")
