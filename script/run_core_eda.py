@@ -546,6 +546,120 @@ def summarize_numeric_columns(df: pd.DataFrame, exclude_columns: List[str]) -> T
 
 _NEAR_CONSTANT_IQR_RATIO = 1e-6
 
+_SCALE_SPREAD_ORDERS_THRESHOLD = 2.0  # log10(range) span that flags mixed-scale columns
+_SKEWNESS_HIGH = 2.0                  # |skewness| above this is considered high
+_SKEWNESS_LOG_CANDIDATE = 1.5        # positive-only column with skew > this → log hint
+_DOMINANT_SCALE_RATIO = 10.0         # range > median_range * this → dominant column
+
+
+def detect_feature_scaling_issues(
+    df: pd.DataFrame,
+    numeric_columns: List[str],
+) -> Dict[str, Any]:
+    if len(numeric_columns) == 0:
+        return {"status": "not_available", "note": "no numeric columns"}
+
+    per_column: List[Dict[str, Any]] = []
+    valid_ranges: List[float] = []
+
+    for col in numeric_columns:
+        series = pd.to_numeric(df[col], errors="coerce").dropna()
+        if series.empty:
+            continue
+
+        col_min = float(series.min())
+        col_max = float(series.max())
+        col_range = col_max - col_min
+        if col_range == 0:
+            continue
+
+        col_std = float(series.std()) if len(series) > 1 else 0.0
+        col_mean = float(series.mean())
+        skewness = float(series.skew()) if len(series) >= 3 else 0.0
+        log10_range = float(np.log10(col_range)) if col_range > 0 else 0.0
+
+        positive_only = col_min >= 0
+        already_normalized = positive_only and col_max <= 1.0
+
+        flags: List[str] = []
+        if already_normalized:
+            flags.append("already_normalized")
+        if abs(skewness) > _SKEWNESS_HIGH:
+            flags.append("high_skew")
+        if positive_only and not already_normalized and skewness > _SKEWNESS_LOG_CANDIDATE:
+            flags.append("log_transform_candidate")
+
+        per_column.append(
+            {
+                "column": str(col),
+                "min": col_min,
+                "max": col_max,
+                "range": col_range,
+                "std": col_std,
+                "mean": col_mean,
+                "skewness": round(skewness, 4),
+                "log10_range": round(log10_range, 3),
+                "positive_only": positive_only,
+                "already_normalized": already_normalized,
+                "flags": flags,
+            }
+        )
+        valid_ranges.append(col_range)
+
+    if not per_column:
+        return {"status": "not_available", "note": "no numeric columns with non-zero range"}
+
+    log10_ranges = [e["log10_range"] for e in per_column if not e["already_normalized"]]
+    scale_spread_orders = 0.0
+    mixed_scale_detected = False
+    max_range_ratio = 1.0
+
+    non_norm_ranges = [e["range"] for e in per_column if not e["already_normalized"]]
+    if len(non_norm_ranges) >= 2:
+        max_range_ratio = float(max(non_norm_ranges) / min(non_norm_ranges))
+    if len(log10_ranges) >= 2:
+        scale_spread_orders = float(max(log10_ranges) - min(log10_ranges))
+        mixed_scale_detected = scale_spread_orders >= _SCALE_SPREAD_ORDERS_THRESHOLD
+
+    median_range = float(np.median(non_norm_ranges)) if non_norm_ranges else 0.0
+    for entry in per_column:
+        if not entry["already_normalized"] and median_range > 0:
+            if entry["range"] >= median_range * _DOMINANT_SCALE_RATIO:
+                entry["flags"].append("dominant_scale")
+            elif entry["range"] <= median_range / _DOMINANT_SCALE_RATIO:
+                entry["flags"].append("small_scale")
+
+    recommendations: List[str] = []
+    if mixed_scale_detected:
+        recommendations.append(
+            f"Features span {scale_spread_orders:.1f} orders of magnitude in range. "
+            "Standardize or min-max scale before using distance-based or gradient-based models."
+        )
+    log_candidates = [e["column"] for e in per_column if "log_transform_candidate" in e["flags"]]
+    for col_name in log_candidates:
+        entry = next(e for e in per_column if e["column"] == col_name)
+        recommendations.append(
+            f"'{col_name}' is right-skewed (skewness={entry['skewness']:.2f}) and strictly positive; "
+            "consider log1p transform."
+        )
+    high_skew_cols = [e for e in per_column if "high_skew" in e["flags"] and "log_transform_candidate" not in e["flags"]]
+    if high_skew_cols:
+        recommendations.append(
+            f"{len(high_skew_cols)} column(s) show high skewness (|skew| > {_SKEWNESS_HIGH}): "
+            + ", ".join(f"'{e['column']}' ({e['skewness']:+.2f})" for e in high_skew_cols[:5])
+            + ". Consider power or robust scaling."
+        )
+
+    return {
+        "status": "ok",
+        "numeric_column_count": len(per_column),
+        "mixed_scale_detected": mixed_scale_detected,
+        "scale_spread_orders": round(scale_spread_orders, 3),
+        "max_range_ratio": round(max_range_ratio, 3),
+        "per_column": per_column,
+        "recommendations": recommendations,
+    }
+
 
 def detect_outliers(df: pd.DataFrame, numeric_columns: List[str]) -> Dict[str, Any]:
     outlier_summary = []
@@ -985,6 +1099,7 @@ def build_eda_summary(
     label_distribution = compute_label_distribution(df, label_column)
     rare_classes = detect_rare_classes(df, label_column)
     numeric_summaries, numeric_columns = summarize_numeric_columns(df, exclude_columns=exclude_from_numeric)
+    feature_scaling = detect_feature_scaling_issues(df, numeric_columns)
     outliers = detect_outliers(df, numeric_columns)
     grouped_labels = grouped_label_distribution(df, label_column, grouping_columns)
     missingness_by_label = analyze_missingness_by_label(df, label_column)
@@ -1032,6 +1147,7 @@ def build_eda_summary(
         "label_distribution": label_distribution,
         "rare_classes": rare_classes,
         "numeric_summaries": numeric_summaries,
+        "feature_scaling": feature_scaling,
         "outlier_summary": outliers,
         "grouped_label_distribution": grouped_labels,
         "label_noise_heuristics": label_noise,
@@ -1134,6 +1250,32 @@ def build_markdown_summary(summary: Dict[str, Any]) -> str:
             lines.append(f"- {row['column']}: {row['outlier_count']} outliers ({row['outlier_rate']:.3f})")
     else:
         lines.append("- No IQR-based outliers detected or not enough numeric columns.")
+    lines.append("")
+
+    scaling = summary.get("feature_scaling", {})
+    lines.append("## Feature scaling")
+    if scaling.get("status") == "ok":
+        lines.append(
+            f"- Scale spread: {scaling['scale_spread_orders']:.2f} orders of magnitude "
+            f"across {scaling['numeric_column_count']} numeric columns "
+            f"(max range ratio: {scaling['max_range_ratio']:.1f}×)"
+        )
+        if scaling.get("mixed_scale_detected"):
+            lines.append("- **Mixed scale detected** — features are on substantially different scales.")
+        flagged = [e for e in scaling.get("per_column", []) if e["flags"]]
+        for entry in flagged[:10]:
+            flag_str = ", ".join(entry["flags"])
+            lines.append(
+                f"- {entry['column']}: range={entry['range']:.3g}, skew={entry['skewness']:+.2f}"
+                f" [{flag_str}]"
+            )
+        recs = scaling.get("recommendations", [])
+        if recs:
+            lines.append("- Recommendations:")
+            for rec in recs:
+                lines.append(f"  - {rec}")
+    else:
+        lines.append("- Not available")
     lines.append("")
 
     asset_metadata = summary.get("asset_metadata", {})
