@@ -14,6 +14,13 @@ import librosa
 import numpy as np
 import soundfile as sf
 
+from config import (
+    AUDIO_SR_TARGET,
+    AUDIO_SILENCE_TOP_DB,
+    AUDIO_CLIPPING_THRESHOLD,
+    AUDIO_MAX_DURATION_S,
+)
+
 
 # --- Info (header-only read) ---
 
@@ -49,7 +56,7 @@ def _load_mono(
     path: str,
     y: Optional[np.ndarray],
     sr: Optional[int],
-    sr_target: int = 22050,
+    sr_target: int = AUDIO_SR_TARGET,
 ) -> Tuple[np.ndarray, int]:
     if y is not None and sr is not None:
         return y, sr
@@ -107,7 +114,7 @@ def compute_silence_ratio(
     path: str,
     y: Optional[np.ndarray] = None,
     sr: Optional[int] = None,
-    top_db: float = 60.0,
+    top_db: float = AUDIO_SILENCE_TOP_DB,
 ) -> dict:
     """Fraction of samples below the silence threshold."""
     y_mono, _ = _load_mono(path, y, sr)
@@ -123,7 +130,7 @@ def compute_clipping_ratio(
     path: str,
     y: Optional[np.ndarray] = None,
     sr: Optional[int] = None,
-    threshold: float = 0.999,
+    threshold: float = AUDIO_CLIPPING_THRESHOLD,
 ) -> dict:
     """Fraction of samples at or above the clipping threshold."""
     if y is not None:
@@ -138,7 +145,7 @@ def compute_clipping_ratio(
 # --- Composite entry point ---
 
 
-def get_audio_metadata(path: str, max_duration_s: float = 120.0) -> dict:
+def get_audio_metadata(path: str, max_duration_s: float = AUDIO_MAX_DURATION_S) -> dict:
     """
     Extract a flat dict of audio metadata for a single file.
 
@@ -156,7 +163,7 @@ def get_audio_metadata(path: str, max_duration_s: float = 120.0) -> dict:
 
     # Single waveform load for all downstream feature extraction
     try:
-        y_stereo, sr = librosa.load(path, sr=22050, mono=False, duration=max_duration_s)
+        y_stereo, sr = librosa.load(path, sr=AUDIO_SR_TARGET, mono=False, duration=max_duration_s)
         y_mono = librosa.to_mono(y_stereo) if y_stereo.ndim > 1 else y_stereo
     except Exception as exc:
         result["audio_load_error"] = str(exc)

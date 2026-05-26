@@ -1,5 +1,7 @@
 import numpy as np
 
+from config import SKELETON_CONF_THRESHOLD, SKELETON_MIN_JOINTS
+
 
 def load_skeleton_npz(npz_path: str) -> dict:
     """
@@ -51,8 +53,8 @@ def compute_visibility(keypoints: np.ndarray, conf_threshold: float = 0.3) -> fl
 
 def compute_trace_length(
     keypoints: np.ndarray,
-    conf_threshold: float = 0.3,
-    min_joints: int = 10,
+    conf_threshold: float = SKELETON_CONF_THRESHOLD,
+    min_joints: int = SKELETON_MIN_JOINTS,
 ) -> int:
     """
     Max number of consecutive frames where at least `min_joints` keypoints
@@ -119,7 +121,7 @@ _LIMBS = {
 
 def compute_joint_velocity_stats(
     keypoints: np.ndarray,
-    conf_threshold: float = 0.3,
+    conf_threshold: float = SKELETON_CONF_THRESHOLD,
 ) -> dict:
     """
     Mean, max, and variance of joint velocity (px/frame) across all frames and joints.
@@ -187,7 +189,7 @@ def compute_bbox_area_ratio(
 
 def compute_limb_length_variance(
     keypoints: np.ndarray,
-    conf_threshold: float = 0.3,
+    conf_threshold: float = SKELETON_CONF_THRESHOLD,
 ) -> dict:
     """
     Variance of limb lengths (in pixels) across frames for four limbs:

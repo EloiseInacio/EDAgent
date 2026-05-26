@@ -4,9 +4,21 @@ import json
 from pathlib import Path
 import pandas as pd
 
+from config import (
+    VIDEO_ROI_SIZE,
+    VIDEO_FLOW_SAMPLING_RATE,
+    VIDEO_FLOW_THRESHOLD_RATIO,
+    VIDEO_FLOW_PYR_SCALE,
+    VIDEO_FLOW_LEVELS,
+    VIDEO_FLOW_WINSIZE,
+    VIDEO_FLOW_ITERATIONS,
+    VIDEO_FLOW_POLY_N,
+    VIDEO_FLOW_POLY_SIGMA,
+)
+
 def snr_across_frames(
     video_path: str,
-    roi_size: int = 64,
+    roi_size: int = VIDEO_ROI_SIZE,
     corner: str = "top_right",
     max_frames: int | None = None,
 ) -> float:
@@ -94,7 +106,7 @@ def snr_across_frames(
 
 
 
-def compute_optical_flow_amplitude(video_path, sampling_rate=5, threshold_ratio=0.5):
+def compute_optical_flow_amplitude(video_path, sampling_rate=VIDEO_FLOW_SAMPLING_RATE, threshold_ratio=VIDEO_FLOW_THRESHOLD_RATIO):
     """
     Computes the average motion amplitude for a video using optical flow,
     with temporal downsampling, and estimates the action window
@@ -154,12 +166,12 @@ def compute_optical_flow_amplitude(video_path, sampling_rate=5, threshold_ratio=
             flow = cv2.calcOpticalFlowFarneback(
                 prev_gray, curr_gray,
                 None,
-                pyr_scale=0.5,
-                levels=3,
-                winsize=15,
-                iterations=3,
-                poly_n=5,
-                poly_sigma=1.2,
+                pyr_scale=VIDEO_FLOW_PYR_SCALE,
+                levels=VIDEO_FLOW_LEVELS,
+                winsize=VIDEO_FLOW_WINSIZE,
+                iterations=VIDEO_FLOW_ITERATIONS,
+                poly_n=VIDEO_FLOW_POLY_N,
+                poly_sigma=VIDEO_FLOW_POLY_SIGMA,
                 flags=0,
             )
 

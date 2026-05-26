@@ -24,6 +24,7 @@ _SEGMENT_RE = re.compile(r"^(.+)_(\d+)$")
 import numpy as np
 import pandas as pd
 
+from config import NESTING_PURITY_THRESHOLD as _NESTING_PURITY_THRESHOLD
 from utils import (
     PATH_HINTS,
     LABEL_HINTS,
@@ -314,7 +315,6 @@ def _detect_path_directory_hierarchy(
     }
 
 
-_NESTING_PURITY_THRESHOLD = 0.95
 
 
 def detect_hierarchical_structure(

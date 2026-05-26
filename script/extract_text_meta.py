@@ -28,6 +28,8 @@ from typing import Any, Dict, Iterable, List, Optional
 import numpy as np
 import pandas as pd
 
+from config import TEXT_LENGTH_BUCKET_BINS
+
 
 WORD_RE = re.compile(r"\b\w+\b", flags=re.UNICODE)
 SENTENCE_RE = re.compile(r"(?<=[.!?])\s+")
@@ -425,7 +427,7 @@ def summarize_text_metadata(df_meta: pd.DataFrame) -> Dict[str, Any]:
 def add_length_bucket(df_meta: pd.DataFrame, source_col: str = "word_count") -> pd.DataFrame:
     """Add coarse document-length buckets for grouped EDA."""
     df_meta = df_meta.copy()
-    bins = [-np.inf, 50, 200, 1000, np.inf]
+    bins = [-np.inf] + TEXT_LENGTH_BUCKET_BINS + [np.inf]
     labels = ["very_short", "short", "medium", "long"]
     df_meta["length_bucket"] = pd.cut(df_meta[source_col], bins=bins, labels=labels)
     return df_meta

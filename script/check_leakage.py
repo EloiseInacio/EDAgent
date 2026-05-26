@@ -31,6 +31,13 @@ from typing import Any, Dict, List, Optional, Tuple
 import numpy as np
 import pandas as pd
 
+from config import (
+    LEAKAGE_TOP_N as DEFAULT_TOP_N,
+    LEAKAGE_MIN_TOKEN_COUNT as MIN_TOKEN_COUNT,
+    LEAKAGE_HIGH_RISK_MATCH_RATE as HIGH_RISK_MATCH_RATE,
+    LEAKAGE_RISK_HIGH_THRESHOLD,
+    LEAKAGE_RISK_MEDIUM_THRESHOLD,
+)
 from utils import (
     PATH_HINTS,
     LABEL_HINTS,
@@ -46,11 +53,6 @@ from utils import (
 
 
 PATH_TOKEN_SPLIT_RE = re.compile(r"[\\/._\-\s]+")
-
-
-DEFAULT_TOP_N = 25
-MIN_TOKEN_COUNT = 3
-HIGH_RISK_MATCH_RATE = 0.8
 
 
 def parse_args() -> argparse.Namespace:
@@ -78,9 +80,9 @@ def parse_args() -> argparse.Namespace:
 
 
 def classify_risk(score: float) -> str:
-    if score >= 0.85:
+    if score >= LEAKAGE_RISK_HIGH_THRESHOLD:
         return "high"
-    if score >= 0.55:
+    if score >= LEAKAGE_RISK_MEDIUM_THRESHOLD:
         return "medium"
     return "low"
 

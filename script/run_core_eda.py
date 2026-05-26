@@ -32,6 +32,22 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 
+from config import (
+    MAX_ASSET_ROWS as DEFAULT_MAX_ASSET_ROWS,
+    EDA_TOP_N as DEFAULT_TOP_N,
+    RARE_CLASS_PROPORTION_THRESHOLD,
+    RARE_CLASS_COUNT_THRESHOLD,
+    TEXT_FILE_SUFFIXES,
+    AUDIO_FILE_SUFFIXES,
+    TEXT_COLUMN_HINTS,
+    CO_MISSING_MIN_JACCARD as _CO_MISSING_MIN_JACCARD,
+    LABEL_NOISE_MIN_CLASS_SIZE as _LABEL_NOISE_MIN_CLASS_SIZE,
+    NEAR_CONSTANT_IQR_RATIO as _NEAR_CONSTANT_IQR_RATIO,
+    SCALE_SPREAD_ORDERS_THRESHOLD as _SCALE_SPREAD_ORDERS_THRESHOLD,
+    SKEWNESS_HIGH as _SKEWNESS_HIGH,
+    SKEWNESS_LOG_CANDIDATE as _SKEWNESS_LOG_CANDIDATE,
+    DOMINANT_SCALE_RATIO as _DOMINANT_SCALE_RATIO,
+)
 from utils import (
     read_json,
     write_json,
@@ -86,27 +102,6 @@ except Exception:
 warnings.filterwarnings("ignore", category=RuntimeWarning)
 
 
-DEFAULT_MAX_ASSET_ROWS = 50
-DEFAULT_TOP_N = 20
-RARE_CLASS_PROPORTION_THRESHOLD = 0.01
-RARE_CLASS_COUNT_THRESHOLD = 5
-TEXT_FILE_SUFFIXES = {".txt", ".md", ".log", ".json", ".jsonl", ".csv", ".tsv"}
-AUDIO_FILE_SUFFIXES = {".wav", ".mp3", ".flac", ".ogg", ".m4a", ".aac"}
-TEXT_COLUMN_HINTS = {
-    "text",
-    "transcript",
-    "caption",
-    "sentence",
-    "document",
-    "content",
-    "utterance",
-    "review",
-    "comment",
-    "description",
-    "body",
-    "prompt",
-    "response",
-}
 
 
 def parse_args() -> argparse.Namespace:
@@ -231,8 +226,6 @@ def compute_missingness(df: pd.DataFrame) -> Dict[str, Any]:
     }
 
 
-# Minimum Jaccard similarity to report a co-missing pair.
-_CO_MISSING_MIN_JACCARD = 0.5
 
 
 def compute_co_missingness(df: pd.DataFrame) -> Dict[str, Any]:
@@ -346,7 +339,6 @@ def detect_rare_classes(
     }
 
 
-_LABEL_NOISE_MIN_CLASS_SIZE = 10
 
 
 def _conflicting_path_labels(
@@ -544,12 +536,6 @@ def summarize_numeric_columns(df: pd.DataFrame, exclude_columns: List[str]) -> T
     return summaries, numeric_columns
 
 
-_NEAR_CONSTANT_IQR_RATIO = 1e-6
-
-_SCALE_SPREAD_ORDERS_THRESHOLD = 2.0  # log10(range) span that flags mixed-scale columns
-_SKEWNESS_HIGH = 2.0                  # |skewness| above this is considered high
-_SKEWNESS_LOG_CANDIDATE = 1.5        # positive-only column with skew > this → log hint
-_DOMINANT_SCALE_RATIO = 10.0         # range > median_range * this → dominant column
 
 
 def detect_feature_scaling_issues(
