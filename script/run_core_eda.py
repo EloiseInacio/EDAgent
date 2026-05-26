@@ -47,6 +47,10 @@ from config import (
     SKEWNESS_HIGH as _SKEWNESS_HIGH,
     SKEWNESS_LOG_CANDIDATE as _SKEWNESS_LOG_CANDIDATE,
     DOMINANT_SCALE_RATIO as _DOMINANT_SCALE_RATIO,
+    OUTLIER_MIN_SAMPLES as _OUTLIER_MIN_SAMPLES,
+    OUTLIER_IQR_MILD_FACTOR as _OUTLIER_IQR_MILD_FACTOR,
+    OUTLIER_IQR_EXTREME_FACTOR as _OUTLIER_IQR_EXTREME_FACTOR,
+    OUTLIER_MAD_THRESHOLD as _OUTLIER_MAD_THRESHOLD,
 )
 from utils import (
     read_json,
@@ -647,39 +651,93 @@ def detect_feature_scaling_issues(
     }
 
 
+def _mad_outlier_mask(numeric: pd.Series) -> pd.Series:
+    """Return a boolean mask of Modified Z-score outliers (MAD-based, robust)."""
+    median = float(numeric.median())
+    mad = float((numeric - median).abs().median())
+    if mad == 0:
+        return pd.Series(False, index=numeric.index)
+    modified_z = 0.6745 * (numeric - median) / mad
+    return modified_z.abs() > _OUTLIER_MAD_THRESHOLD
+
+
 def detect_outliers(df: pd.DataFrame, numeric_columns: List[str]) -> Dict[str, Any]:
     outlier_summary = []
 
     for col in numeric_columns:
-        numeric = pd.to_numeric(df[col], errors="coerce").dropna()
-        if numeric.shape[0] < 5:
+        numeric = pd.to_numeric(df[col], errors="coerce")
+        clean = numeric.dropna()
+        if len(clean) < _OUTLIER_MIN_SAMPLES:
             continue
-        q1 = float(numeric.quantile(0.25))
-        q3 = float(numeric.quantile(0.75))
+
+        q1 = float(clean.quantile(0.25))
+        q3 = float(clean.quantile(0.75))
         iqr = q3 - q1
         if iqr == 0:
             continue
-        # Skip near-constant columns: IQR negligible relative to the column's scale.
-        # Prevents absurdly tight Tukey fences that flag normal values as outliers.
+        # Skip near-constant columns: prevents absurdly tight fences.
         data_scale = max(abs(q1), abs(q3), 1e-9)
         if iqr / data_scale < _NEAR_CONSTANT_IQR_RATIO:
             continue
-        lower = q1 - 1.5 * iqr
-        upper = q3 + 1.5 * iqr
-        mask = (pd.to_numeric(df[col], errors="coerce") < lower) | (pd.to_numeric(df[col], errors="coerce") > upper)
-        count = int(mask.fillna(False).sum())
-        if count == 0:
+
+        mild_lower = q1 - _OUTLIER_IQR_MILD_FACTOR * iqr
+        mild_upper = q3 + _OUTLIER_IQR_MILD_FACTOR * iqr
+        extreme_lower = q1 - _OUTLIER_IQR_EXTREME_FACTOR * iqr
+        extreme_upper = q3 + _OUTLIER_IQR_EXTREME_FACTOR * iqr
+
+        below_mild = numeric < mild_lower
+        above_mild = numeric > mild_upper
+        mild_mask = (below_mild | above_mild).fillna(False)
+
+        below_extreme = numeric < extreme_lower
+        above_extreme = numeric > extreme_upper
+        extreme_mask = (below_extreme | above_extreme).fillna(False)
+
+        # MAD-based detection on clean values; reindex to full series for alignment.
+        mad_mask_clean = _mad_outlier_mask(clean)
+        mad_mask = mad_mask_clean.reindex(numeric.index, fill_value=False)
+
+        mild_count = int(mild_mask.sum())
+        if mild_count == 0 and not mad_mask.any():
             continue
-        examples = df.loc[mask.fillna(False), col].head(5).tolist()
+
+        # Directionality
+        count_low = int((below_mild).fillna(False).sum())
+        count_high = int((above_mild).fillna(False).sum())
+        extreme_count = int(extreme_mask.sum())
+
+        # Severity: distance of the single worst value from its fence, in IQR units.
+        worst_low = float((mild_lower - numeric[below_mild.fillna(False)]).max()) / iqr if count_low else 0.0
+        worst_high = float((numeric[above_mild.fillna(False)] - mild_upper).max()) / iqr if count_high else 0.0
+        severity_iqr_multiples = round(max(worst_low, worst_high), 2)
+
+        # Example values: up to 5 most extreme points (by distance from nearest fence).
+        all_outlier_mask = mild_mask | mad_mask
+        outlier_vals = numeric[all_outlier_mask].dropna()
+        distances = outlier_vals.apply(
+            lambda v: max(mild_lower - v, 0) + max(v - mild_upper, 0)
+        )
+        top_examples = outlier_vals.loc[distances.nlargest(5).index]
+        examples = [
+            {"index": int(i), "value": safe_float(v) if safe_float(v) is not None else str(v)}
+            for i, v in top_examples.items()
+        ]
+
         outlier_summary.append(
             {
                 "column": str(col),
-                "method": "iqr",
-                "lower_bound": lower,
-                "upper_bound": upper,
-                "outlier_count": count,
-                "outlier_rate": float(count / max(len(df), 1)),
-                "example_values": [safe_float(x) if safe_float(x) is not None else str(x) for x in examples],
+                "iqr_mild_count": mild_count,
+                "iqr_extreme_count": extreme_count,
+                "count_low": count_low,
+                "count_high": count_high,
+                "mad_count": int(mad_mask.sum()),
+                "outlier_rate": float(mild_count / max(len(df), 1)),
+                "severity_iqr_multiples": severity_iqr_multiples,
+                "mild_lower_bound": round(mild_lower, 6),
+                "mild_upper_bound": round(mild_upper, 6),
+                "extreme_lower_bound": round(extreme_lower, 6),
+                "extreme_upper_bound": round(extreme_upper, 6),
+                "top_examples": examples,
             }
         )
 
@@ -1233,9 +1291,26 @@ def build_markdown_summary(summary: Dict[str, Any]) -> str:
     outliers = summary.get("outlier_summary", {}).get("per_column", [])
     if outliers:
         for row in outliers[:10]:
-            lines.append(f"- {row['column']}: {row['outlier_count']} outliers ({row['outlier_rate']:.3f})")
+            mild = row.get("iqr_mild_count", row.get("outlier_count", 0))
+            extreme = row.get("iqr_extreme_count", 0)
+            mad = row.get("mad_count", 0)
+            rate = row.get("outlier_rate", 0.0)
+            severity = row.get("severity_iqr_multiples", 0.0)
+            lo = row.get("count_low", 0)
+            hi = row.get("count_high", 0)
+            parts = [f"{mild} mild"]
+            if extreme:
+                parts.append(f"{extreme} extreme")
+            if mad:
+                parts.append(f"{mad} MAD")
+            direction = f"↓{lo} ↑{hi}" if (lo or hi) else ""
+            lines.append(
+                f"- **{row['column']}**: {' / '.join(parts)} outliers"
+                f" ({rate:.3f} rate, worst {severity:.1f}× IQR from fence)"
+                + (f"  {direction}" if direction else "")
+            )
     else:
-        lines.append("- No IQR-based outliers detected or not enough numeric columns.")
+        lines.append("- No outliers detected or not enough numeric columns.")
     lines.append("")
 
     scaling = summary.get("feature_scaling", {})

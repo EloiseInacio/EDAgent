@@ -92,26 +92,54 @@ The final report follows a structured template and includes:
 
 ## Repository structure
 
-A typical skill layout looks like this:
-
 ```text
-eda-agent/
-├── SKILL.md
+EDAgent/
+├── CLAUDE.md
 ├── README.md
 ├── env.yaml
+├── mcp_server.py
+├── .mcp.json
 ├── agents/
 │   └── openai.yaml
-├── scripts/
-│   ├── profile_manifest.py
+├── script/
+│   ├── config.py               ← user-tunable constants (thresholds, limits, flags)
+│   ├── data_profile.py
 │   ├── run_core_eda.py
 │   ├── check_leakage.py
-│   ├── extract_meta.py
+│   ├── extract_video_meta.py
 │   ├── extract_skeleton_meta.py
-│   └── extract_text_meta.py
-└── references/
+│   ├── extract_text_meta.py
+│   ├── extract_audio_meta.py
+│   ├── load_sql.py
+│   └── utils.py
+└── reference/
     ├── questionnaire.md
-    └── report-template.md
+    ├── report-template.md
+    └── system_prompt_openai.md
 ```
+
+## Configuration
+
+All user-tunable constants live in `script/config.py`. Edit that file to adapt the agent to your dataset without touching any script internals.
+
+Constants are grouped by concern:
+
+| Group | Examples |
+|-------|---------|
+| General | `MAX_ASSET_ROWS`, `EDA_TOP_N`, `LEAKAGE_TOP_N` |
+| Labels & classes | `RARE_CLASS_PROPORTION_THRESHOLD`, `RARE_CLASS_COUNT_THRESHOLD`, `LABEL_NOISE_MIN_CLASS_SIZE` |
+| Outlier detection | `OUTLIER_MIN_SAMPLES`, `OUTLIER_IQR_MILD_FACTOR`, `OUTLIER_IQR_EXTREME_FACTOR`, `OUTLIER_MAD_THRESHOLD` |
+| Numeric features | `SKEWNESS_HIGH`, `SCALE_SPREAD_ORDERS_THRESHOLD`, `NEAR_CONSTANT_IQR_RATIO`, `DOMINANT_SCALE_RATIO` |
+| Co-missingness | `CO_MISSING_MIN_JACCARD` |
+| Leakage detection | `LEAKAGE_MIN_TOKEN_COUNT`, `LEAKAGE_HIGH_RISK_MATCH_RATE`, `LEAKAGE_RISK_HIGH_THRESHOLD`, `LEAKAGE_RISK_MEDIUM_THRESHOLD` |
+| Data profiling | `NESTING_PURITY_THRESHOLD` |
+| File type detection | `TEXT_FILE_SUFFIXES`, `AUDIO_FILE_SUFFIXES`, `TEXT_COLUMN_HINTS` |
+| Audio extraction | `AUDIO_SR_TARGET`, `AUDIO_SILENCE_TOP_DB`, `AUDIO_CLIPPING_THRESHOLD`, `AUDIO_MAX_DURATION_S` |
+| Video extraction | `VIDEO_ROI_SIZE`, `VIDEO_FLOW_SAMPLING_RATE`, `VIDEO_FLOW_THRESHOLD_RATIO`, Farneback params |
+| Skeleton extraction | `SKELETON_CONF_THRESHOLD`, `SKELETON_MIN_JOINTS` |
+| Text extraction | `TEXT_LENGTH_BUCKET_BINS` |
+
+Each constant has an inline description in `config.py` explaining what it controls and which direction to adjust it.
 
 ## Main scripts
 

@@ -43,6 +43,22 @@ LABEL_NOISE_MIN_CLASS_SIZE: int = 10
 # Numeric feature analysis
 # ===========================================================================
 
+# Minimum number of non-null values required to run outlier detection on a column.
+OUTLIER_MIN_SAMPLES: int = 5
+
+# IQR fence multiplier for mild outliers (Tukey inner fence).
+# Values outside Q1 - k*IQR … Q3 + k*IQR are flagged as mild outliers.
+OUTLIER_IQR_MILD_FACTOR: float = 1.5
+
+# IQR fence multiplier for extreme outliers (Tukey outer fence).
+# Values outside Q1 - k*IQR … Q3 + k*IQR are classified as extreme.
+OUTLIER_IQR_EXTREME_FACTOR: float = 3.0
+
+# Modified Z-score threshold for MAD-based outlier detection.
+# Values with |0.6745 * (x - median) / MAD| above this are flagged.
+# 3.5 is the value recommended by Iglewicz & Hoaglin (1993).
+OUTLIER_MAD_THRESHOLD: float = 3.5
+
 # IQR / total-range ratio below which a numeric column is considered
 # near-constant and flagged. Raise to catch columns with very small variance.
 NEAR_CONSTANT_IQR_RATIO: float = 1e-6
