@@ -211,3 +211,28 @@ SKELETON_MIN_JOINTS: int = 10
 #   - medium     : word_count <  TEXT_LENGTH_BUCKET_BINS[2]
 #   - long       : word_count >= TEXT_LENGTH_BUCKET_BINS[2]
 TEXT_LENGTH_BUCKET_BINS: list = [50, 200, 1000]
+
+# ===========================================================================
+# Time-series leakage detection
+# ===========================================================================
+
+# Width of the "looks globally z-scored" band around mean=0 and std=1. A
+# numeric column whose global mean is within this value of 0 and whose global
+# std is within this value of 1.0 is treated as a candidate for global-fit
+# normalisation leakage.
+TS_NORMALIZATION_GLOBAL_STD_TOLERANCE: float = 0.15
+
+# Minimum absolute per-split mean deviation (in standardised units) that
+# triggers a global-fit normalisation leakage finding. Smaller values catch
+# subtler cross-split drift.
+TS_NORMALIZATION_SPLIT_DRIFT_THRESHOLD: float = 0.2
+
+# Minimum temporal gap between consecutive splits expressed as a multiple of
+# the median within-split sample spacing. Gaps narrower than this are flagged
+# because any input window larger than the gap would straddle the boundary.
+# Set to match your model's typical context/window length for best results.
+TS_WINDOW_BOUNDARY_MIN_GAP_STEPS: float = 1.0
+
+# Minimum normalised Jensen-Shannon divergence (range [0, 1]) between train
+# and test season distributions to flag a seasonal distribution shift risk.
+TS_SEASONAL_SHIFT_MIN_JS_DIVERGENCE: float = 0.1

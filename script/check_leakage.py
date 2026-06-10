@@ -13,6 +13,9 @@ Primary checks:
 - filename or path tokens correlated with labels
 - metadata columns that may act as shortcut proxies for the label
 - basic temporal overlap risk heuristics when start/end-like columns exist
+- time-series normalisation leakage (scaler fitted on full data vs train-only)
+- input window straddles train/val or val/test boundary
+- seasonal distribution shift between train and test periods
 
 Outputs:
 - leakage_report.json
@@ -37,6 +40,10 @@ from config import (
     LEAKAGE_HIGH_RISK_MATCH_RATE as HIGH_RISK_MATCH_RATE,
     LEAKAGE_RISK_HIGH_THRESHOLD,
     LEAKAGE_RISK_MEDIUM_THRESHOLD,
+    TS_NORMALIZATION_GLOBAL_STD_TOLERANCE,
+    TS_NORMALIZATION_SPLIT_DRIFT_THRESHOLD,
+    TS_WINDOW_BOUNDARY_MIN_GAP_STEPS,
+    TS_SEASONAL_SHIFT_MIN_JS_DIVERGENCE,
 )
 from utils import (
     PATH_HINTS,
@@ -433,6 +440,402 @@ def temporal_overlap_checks(df: pd.DataFrame, grouping_columns: List[str], tempo
     }
 
 
+_SPLIT_RANK: Dict[str, int] = {
+    "train": 0, "training": 0,
+    "val": 1, "valid": 1, "validation": 1,
+    "test": 2, "testing": 2, "eval": 2,
+}
+
+
+def _split_rank(name: str) -> int:
+    return _SPLIT_RANK.get(str(name).lower(), 99)
+
+
+def _find_split_col(grouping_columns: List[str]) -> Optional[str]:
+    for c in grouping_columns:
+        if any(k in c.lower() for k in ("split", "fold", "partition")):
+            return c
+    return None
+
+
+def ts_normalization_leakage_checks(
+    df: pd.DataFrame,
+    grouping_columns: List[str],
+    label_column: Optional[str],
+    path_columns: List[str],
+    identifier_columns: List[str],
+) -> Dict[str, Any]:
+    """
+    Detect numeric columns that appear globally z-scored (mean≈0, std≈1) while
+    showing significant per-split mean drift — evidence that the scaler was
+    fitted on the full dataset rather than the train split only.
+    """
+    split_col = _find_split_col(grouping_columns)
+    if not split_col or split_col not in df.columns:
+        return {
+            "risk_type": "ts_normalization_leakage",
+            "severity_score": 0.0,
+            "risk_level": "low",
+            "details": [],
+            "notes": ["No split/fold column identified — cannot assess normalisation scope."],
+        }
+
+    exclude = set(path_columns) | set(identifier_columns) | {split_col}
+    if label_column:
+        exclude.add(label_column)
+
+    candidate_cols = [
+        c for c in df.columns
+        if c not in exclude and pd.api.types.is_numeric_dtype(df[c])
+    ]
+
+    if not candidate_cols:
+        return {
+            "risk_type": "ts_normalization_leakage",
+            "severity_score": 0.0,
+            "risk_level": "low",
+            "details": [],
+            "notes": ["No numeric feature columns available for normalisation check."],
+        }
+
+    findings: List[Dict[str, Any]] = []
+    severity = 0.0
+    tol = TS_NORMALIZATION_GLOBAL_STD_TOLERANCE
+
+    for col in candidate_cols[:50]:
+        series = pd.to_numeric(df[col], errors="coerce").dropna()
+        if len(series) < 20 or series.nunique() <= 10:
+            continue
+
+        global_mean = float(series.mean())
+        global_std = float(series.std())
+        if global_std < 1e-8:
+            continue
+
+        if not (abs(global_mean) < tol and abs(global_std - 1.0) < tol):
+            continue
+
+        tmp = pd.DataFrame({"val": series, "split": df.loc[series.index, split_col]}).dropna()
+        if tmp["split"].nunique() < 2:
+            continue
+
+        split_means = tmp.groupby("split")["val"].mean()
+        max_drift = float(split_means.abs().max())
+
+        if max_drift >= TS_NORMALIZATION_SPLIT_DRIFT_THRESHOLD:
+            severity = max(severity, min(max_drift, 1.0))
+            findings.append({
+                "column": str(col),
+                "global_mean": round(global_mean, 4),
+                "global_std": round(global_std, 4),
+                "per_split_means": {str(k): round(float(v), 4) for k, v in split_means.items()},
+                "max_split_mean_drift": round(max_drift, 4),
+                "interpretation": (
+                    "Column appears globally z-scored but per-split means deviate significantly; "
+                    "scaler was likely fitted on the full dataset, leaking test/val statistics into training."
+                ),
+            })
+
+    findings = sorted(findings, key=lambda x: x["max_split_mean_drift"], reverse=True)[:DEFAULT_TOP_N]
+    return {
+        "risk_type": "ts_normalization_leakage",
+        "severity_score": round(min(severity, 1.0), 3),
+        "risk_level": classify_risk(min(severity, 1.0)),
+        "details": findings,
+        "notes": [] if findings else [
+            "No globally z-scored columns with cross-split mean drift detected."
+        ],
+    }
+
+
+def ts_window_boundary_leakage_checks(
+    df: pd.DataFrame,
+    grouping_columns: List[str],
+    temporal_columns: List[str],
+) -> Dict[str, Any]:
+    """
+    Detect if input windows straddle train/val or val/test boundaries.
+
+    Sub-checks:
+    1. Interleaving — splits are not monotonically ordered in time (rows from
+       different splits are temporally adjacent).
+    2. Boundary gap — the temporal gap at a split boundary is smaller than
+       TS_WINDOW_BOUNDARY_MIN_GAP_STEPS × median within-split sample step,
+       meaning any window of that size or larger would see cross-split samples.
+    """
+    split_col = _find_split_col(grouping_columns)
+    if not split_col or split_col not in df.columns:
+        return {
+            "risk_type": "ts_window_boundary_leakage",
+            "severity_score": 0.0,
+            "risk_level": "low",
+            "details": [],
+            "notes": ["No split/fold column identified."],
+        }
+
+    time_candidates = [
+        c for c in temporal_columns
+        if any(h in str(c).lower() for h in ("time", "timestamp", "date", "frame", "index", "step", "seq", "sample"))
+    ] or temporal_columns[:1]
+
+    if not time_candidates:
+        return {
+            "risk_type": "ts_window_boundary_leakage",
+            "severity_score": 0.0,
+            "risk_level": "low",
+            "details": [],
+            "notes": ["No temporal ordering column found for window boundary check."],
+        }
+
+    time_col = time_candidates[0]
+    if time_col not in df.columns:
+        return {
+            "risk_type": "ts_window_boundary_leakage",
+            "severity_score": 0.0,
+            "risk_level": "low",
+            "details": [],
+            "notes": [f"Temporal column '{time_col}' not present in dataframe."],
+        }
+
+    tmp = df[[split_col, time_col]].copy()
+    tmp[time_col] = pd.to_numeric(tmp[time_col], errors="coerce")
+    tmp = tmp.dropna().astype({split_col: str})
+
+    if len(tmp) < 10 or tmp[split_col].nunique() < 2:
+        return {
+            "risk_type": "ts_window_boundary_leakage",
+            "severity_score": 0.0,
+            "risk_level": "low",
+            "details": [],
+            "notes": ["Insufficient data for window boundary check."],
+        }
+
+    tmp = tmp.sort_values(time_col).reset_index(drop=True)
+    findings: List[Dict[str, Any]] = []
+    severity = 0.0
+
+    # Sub-check 1: split interleaving in temporal order
+    split_seq = tmp[split_col].tolist()
+    run_order: List[str] = []
+    for s in split_seq:
+        if not run_order or s != run_order[-1]:
+            run_order.append(s)
+
+    if len(run_order) > tmp[split_col].nunique():
+        severity = max(severity, 0.8)
+        findings.append({
+            "check": "split_interleaving",
+            "split_column": split_col,
+            "time_column": time_col,
+            "temporal_run_order": run_order[:20],
+            "unique_splits": sorted(tmp[split_col].unique().tolist()),
+            "interpretation": (
+                "Split assignments are interleaved in time; rows from different splits "
+                "are temporally adjacent. Any window-based model will see cross-split samples."
+            ),
+        })
+
+    # Sub-check 2: boundary gap vs median within-split step
+    split_ranges = tmp.groupby(split_col)[time_col].agg(["min", "max"])
+    ordered_splits = sorted(split_ranges.index.tolist(), key=_split_rank)
+
+    within_steps: List[float] = []
+    for _, grp in tmp.groupby(split_col):
+        times = np.sort(grp[time_col].values)
+        diffs = np.diff(times)
+        within_steps.extend(diffs[diffs > 0].tolist())
+
+    median_step = float(np.median(within_steps)) if within_steps else None
+
+    for i in range(len(ordered_splits) - 1):
+        a, b = ordered_splits[i], ordered_splits[i + 1]
+        gap = float(split_ranges.loc[b, "min"]) - float(split_ranges.loc[a, "max"])
+
+        if median_step is not None and median_step > 0:
+            gap_steps = gap / median_step
+            if gap_steps < TS_WINDOW_BOUNDARY_MIN_GAP_STEPS:
+                score = max(0.0, 1.0 - gap_steps / max(TS_WINDOW_BOUNDARY_MIN_GAP_STEPS, 1e-9))
+                severity = max(severity, score)
+                findings.append({
+                    "check": "boundary_gap_too_small",
+                    "split_a": a,
+                    "split_b": b,
+                    "time_column": time_col,
+                    "gap_value": round(gap, 6),
+                    "median_within_split_step": round(median_step, 6),
+                    "gap_in_steps": round(gap_steps, 4),
+                    "interpretation": (
+                        f"Gap between '{a}' end and '{b}' start is {gap_steps:.2f}× the median "
+                        "sample spacing. Any input window larger than this gap will see samples "
+                        "from both splits."
+                    ),
+                })
+        elif gap <= 0:
+            # Negative or zero gap without a reference step — directly flag overlap
+            severity = max(severity, 0.7)
+            findings.append({
+                "check": "boundary_gap_too_small",
+                "split_a": a,
+                "split_b": b,
+                "time_column": time_col,
+                "gap_value": round(gap, 6),
+                "interpretation": (
+                    f"'{b}' starts at or before '{a}' ends in temporal order — "
+                    "splits overlap directly."
+                ),
+            })
+
+    return {
+        "risk_type": "ts_window_boundary_leakage",
+        "severity_score": round(min(severity, 1.0), 3),
+        "risk_level": classify_risk(min(severity, 1.0)),
+        "details": findings,
+        "notes": [] if findings else [
+            f"Splits appear monotonically ordered with adequate boundary gaps "
+            f"(split='{split_col}', time='{time_col}')."
+        ],
+    }
+
+
+def ts_seasonal_distribution_shift_checks(
+    df: pd.DataFrame,
+    grouping_columns: List[str],
+    temporal_columns: List[str],
+) -> Dict[str, Any]:
+    """
+    Detect if train and test periods fall in different calendar seasons,
+    indicating a potential seasonal distribution shift (e.g. spring train,
+    summer test). Uses Jensen-Shannon divergence over season distributions.
+    """
+    split_col = _find_split_col(grouping_columns)
+    if not split_col or split_col not in df.columns:
+        return {
+            "risk_type": "ts_seasonal_distribution_shift",
+            "severity_score": 0.0,
+            "risk_level": "low",
+            "details": [],
+            "notes": ["No split/fold column identified."],
+        }
+
+    # Search for a parseable calendar-date column
+    date_col: Optional[str] = None
+    date_series: Optional[pd.Series] = None
+
+    date_hints = {"date", "time", "timestamp", "datetime", "created", "recorded", "year", "month"}
+    search_order = list(temporal_columns) + [
+        c for c in df.columns if any(h in str(c).lower() for h in date_hints)
+    ]
+    seen: set = set()
+    for col in search_order:
+        if col in seen or col not in df.columns:
+            continue
+        seen.add(col)
+        series = df[col]
+        if pd.api.types.is_datetime64_any_dtype(series):
+            date_col, date_series = col, series
+            break
+        if pd.api.types.is_object_dtype(series) or pd.api.types.is_string_dtype(series):
+            parsed = pd.to_datetime(series, errors="coerce")
+            if parsed.notna().mean() >= 0.7:
+                date_col, date_series = col, parsed
+                break
+
+    if date_col is None or date_series is None:
+        return {
+            "risk_type": "ts_seasonal_distribution_shift",
+            "severity_score": 0.0,
+            "risk_level": "low",
+            "details": [],
+            "notes": ["No parseable calendar date column found for seasonal shift analysis."],
+        }
+
+    def _month_to_season(month: int) -> str:
+        if month in (12, 1, 2):
+            return "winter"
+        if month in (3, 4, 5):
+            return "spring"
+        if month in (6, 7, 8):
+            return "summer"
+        return "autumn"
+
+    SEASONS = ["spring", "summer", "autumn", "winter"]
+
+    tmp = pd.DataFrame({
+        "split": df[split_col].astype(str),
+        "season": date_series.dt.month.map(_month_to_season),
+    }).dropna()
+
+    if tmp.empty or tmp["split"].nunique() < 2:
+        return {
+            "risk_type": "ts_seasonal_distribution_shift",
+            "severity_score": 0.0,
+            "risk_level": "low",
+            "details": [],
+            "notes": ["Insufficient data for seasonal shift analysis."],
+        }
+
+    splits = sorted(tmp["split"].unique().tolist(), key=_split_rank)
+
+    split_dist: Dict[str, Dict[str, float]] = {}
+    for sp in splits:
+        sub = tmp[tmp["split"] == sp]["season"]
+        total = max(len(sub), 1)
+        split_dist[sp] = {s: int((sub == s).sum()) / total for s in SEASONS}
+
+    def _js_divergence(p_dict: Dict[str, float], q_dict: Dict[str, float]) -> float:
+        p = np.array([p_dict[s] for s in SEASONS], dtype=float)
+        q = np.array([q_dict[s] for s in SEASONS], dtype=float)
+        m = (p + q) / 2.0
+        with np.errstate(divide="ignore", invalid="ignore"):
+            kl_pm = np.where((p > 0) & (m > 0), p * np.log(p / m), 0.0).sum()
+            kl_qm = np.where((q > 0) & (m > 0), q * np.log(q / m), 0.0).sum()
+        return float((kl_pm + kl_qm) / 2.0)
+
+    log2 = float(np.log(2))
+    findings: List[Dict[str, Any]] = []
+    severity = 0.0
+    ref = splits[0]
+
+    for cmp in splits[1:]:
+        js = _js_divergence(split_dist[ref], split_dist[cmp])
+        js_norm = min(js / log2, 1.0) if log2 > 0 else 0.0
+
+        if js_norm >= TS_SEASONAL_SHIFT_MIN_JS_DIVERGENCE:
+            severity = max(severity, js_norm)
+            dom_ref = max(split_dist[ref], key=split_dist[ref].get)
+            dom_cmp = max(split_dist[cmp], key=split_dist[cmp].get)
+            findings.append({
+                "check": "seasonal_distribution_shift",
+                "reference_split": ref,
+                "comparison_split": cmp,
+                "date_column": date_col,
+                "js_divergence_normalized": round(js_norm, 4),
+                "season_distribution": {
+                    ref: {s: round(v, 3) for s, v in split_dist[ref].items()},
+                    cmp: {s: round(v, 3) for s, v in split_dist[cmp].items()},
+                },
+                "dominant_season": {ref: dom_ref, cmp: dom_cmp},
+                "interpretation": (
+                    f"'{ref}' is predominantly {dom_ref}; '{cmp}' is predominantly {dom_cmp}. "
+                    "Seasonal distribution shift may cause test distribution to differ from training."
+                ) if dom_ref != dom_cmp else (
+                    f"Both splits share dominant season '{dom_ref}' but their seasonal distributions "
+                    f"diverge (normalised JS = {js_norm:.3f})."
+                ),
+            })
+
+    return {
+        "risk_type": "ts_seasonal_distribution_shift",
+        "severity_score": round(min(severity, 1.0), 3),
+        "risk_level": classify_risk(min(severity, 1.0)),
+        "details": findings,
+        "notes": [] if findings else [
+            f"No significant seasonal distribution shift detected between splits "
+            f"(date column: '{date_col}', split column: '{split_col}')."
+        ],
+    }
+
+
 def missing_group_identifier_risks(df: pd.DataFrame, grouping_columns: List[str], identifier_columns: List[str]) -> Dict[str, Any]:
     findings = []
     severity = 0.0
@@ -533,6 +936,11 @@ def build_report(df: pd.DataFrame, profile: Optional[Dict[str, Any]]) -> Dict[st
     )
     temporal_report = temporal_overlap_checks(df, grouping_columns, temporal_columns)
     missing_key_report = missing_group_identifier_risks(df, grouping_columns, identifier_columns)
+    ts_norm_report = ts_normalization_leakage_checks(
+        df, grouping_columns, label_column, path_columns, identifier_columns
+    )
+    ts_window_report = ts_window_boundary_leakage_checks(df, grouping_columns, temporal_columns)
+    ts_seasonal_report = ts_seasonal_distribution_shift_checks(df, grouping_columns, temporal_columns)
 
     checks = [
         duplicate_report,
@@ -541,6 +949,9 @@ def build_report(df: pd.DataFrame, profile: Optional[Dict[str, Any]]) -> Dict[st
         proxy_feature_report,
         temporal_report,
         missing_key_report,
+        ts_norm_report,
+        ts_window_report,
+        ts_seasonal_report,
     ]
 
     return {

@@ -66,6 +66,9 @@ The agent explicitly checks for:
 * metadata features that may proxy the label
 * temporal overlap risks
 * missing grouping keys that can hide leakage
+* **normalisation fitted on full data** — detects numeric features that are globally z-scored (mean ≈ 0, std ≈ 1) while showing significant per-split mean drift, indicating the scaler saw test or validation statistics during fitting
+* **input window straddling split boundaries** — flags split assignments that are interleaved in time, or where the temporal gap at a boundary is smaller than the median sample spacing, meaning any context window of that size would cross into the adjacent split
+* **seasonal distribution shift** — identifies train and test periods that fall in different calendar seasons using Jensen-Shannon divergence over season distributions (e.g. spring train → summer test)
 
 ### Modality-aware metadata extraction
 
@@ -132,6 +135,7 @@ Constants are grouped by concern:
 | Numeric features | `SKEWNESS_HIGH`, `SCALE_SPREAD_ORDERS_THRESHOLD`, `NEAR_CONSTANT_IQR_RATIO`, `DOMINANT_SCALE_RATIO` |
 | Co-missingness | `CO_MISSING_MIN_JACCARD` |
 | Leakage detection | `LEAKAGE_MIN_TOKEN_COUNT`, `LEAKAGE_HIGH_RISK_MATCH_RATE`, `LEAKAGE_RISK_HIGH_THRESHOLD`, `LEAKAGE_RISK_MEDIUM_THRESHOLD` |
+| Time-series leakage | `TS_NORMALIZATION_GLOBAL_STD_TOLERANCE`, `TS_NORMALIZATION_SPLIT_DRIFT_THRESHOLD`, `TS_WINDOW_BOUNDARY_MIN_GAP_STEPS`, `TS_SEASONAL_SHIFT_MIN_JS_DIVERGENCE` |
 | Data profiling | `NESTING_PURITY_THRESHOLD` |
 | File type detection | `TEXT_FILE_SUFFIXES`, `AUDIO_FILE_SUFFIXES`, `TEXT_COLUMN_HINTS` |
 | Audio extraction | `AUDIO_SR_TARGET`, `AUDIO_SILENCE_TOP_DB`, `AUDIO_CLIPPING_THRESHOLD`, `AUDIO_MAX_DURATION_S` |
@@ -187,12 +191,14 @@ Runs reusable leakage and evaluation-risk checks.
 
 Responsibilities:
 
-* detect duplicate rows
-* detect duplicate paths
-* check overlap across split and group identifiers
+* detect duplicate rows and duplicate paths
+* check entity overlap across split and group identifiers
 * identify filename or path tokens correlated with labels
 * flag likely proxy features
-* evaluate temporal overlap heuristics
+* evaluate temporal overlap heuristics (interval range overlap, sequence duplication)
+* detect normalisation fitted on full data rather than train split only
+* flag input windows that straddle train/val or val/test boundaries
+* detect seasonal distribution shift between train and test periods
 
 Primary outputs:
 
