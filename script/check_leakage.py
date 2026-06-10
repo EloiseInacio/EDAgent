@@ -61,6 +61,25 @@ from utils import (
 
 PATH_TOKEN_SPLIT_RE = re.compile(r"[\\/._\-\s]+")
 
+_SPLIT_RANK: Dict[str, int] = {
+    "train": 0, "training": 0,
+    "val": 1, "valid": 1, "validation": 1,
+    "test": 2, "testing": 2, "eval": 2,
+}
+
+
+def _split_rank(name: str) -> int:
+    return _SPLIT_RANK.get(str(name).lower(), 99)
+
+
+def _find_split_cols(grouping_columns: List[str]) -> List[str]:
+    return [c for c in grouping_columns if any(k in c.lower() for k in ("split", "fold", "partition"))]
+
+
+def _find_split_col(grouping_columns: List[str]) -> Optional[str]:
+    cols = _find_split_cols(grouping_columns)
+    return cols[0] if cols else None
+
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Check dataset leakage risks in a CSV manifest.")
@@ -139,7 +158,7 @@ def split_overlap_checks(df: pd.DataFrame, label_column: Optional[str], grouping
     results = []
     severity = 0.0
 
-    split_like = [c for c in grouping_columns if "split" in c.lower() or "fold" in c.lower() or "partition" in c.lower()]
+    split_like = _find_split_cols(grouping_columns)
     entity_like = [c for c in grouping_columns if c not in split_like]
 
     for split_col in split_like[:3]:
@@ -354,8 +373,8 @@ def proxy_feature_checks(df: pd.DataFrame, label_column: Optional[str], exclude_
 
 
 def temporal_overlap_checks(df: pd.DataFrame, grouping_columns: List[str], temporal_columns: List[str]) -> Dict[str, Any]:
-    split_like = [c for c in grouping_columns if "split" in c.lower() or "fold" in c.lower() or "partition" in c.lower()]
-    if not split_like:
+    split_col_first = _find_split_col(grouping_columns)
+    if not split_col_first:
         return {
             "risk_type": "temporal_overlap",
             "severity_score": 0.0,
@@ -375,7 +394,7 @@ def temporal_overlap_checks(df: pd.DataFrame, grouping_columns: List[str], tempo
     if start_cols and end_cols:
         start_col = start_cols[0]
         end_col = end_cols[0]
-        split_col = split_like[0]
+        split_col = split_col_first
         tmp = df[[split_col, start_col, end_col]].copy()
         tmp[start_col] = pd.to_numeric(tmp[start_col], errors="coerce")
         tmp[end_col] = pd.to_numeric(tmp[end_col], errors="coerce")
@@ -410,8 +429,8 @@ def temporal_overlap_checks(df: pd.DataFrame, grouping_columns: List[str], tempo
                         )
 
     # Sequence/frame duplication across splits.
-    if seq_cols and split_like:
-        split_col = split_like[0]
+    if seq_cols:
+        split_col = split_col_first
         for seq_col in seq_cols[:3]:
             tmp = df[[split_col, seq_col]].dropna().astype(str)
             if tmp.empty:
@@ -438,24 +457,6 @@ def temporal_overlap_checks(df: pd.DataFrame, grouping_columns: List[str], tempo
         "details": findings,
         "notes": [] if findings else ["No temporal overlap evidence found with available columns."],
     }
-
-
-_SPLIT_RANK: Dict[str, int] = {
-    "train": 0, "training": 0,
-    "val": 1, "valid": 1, "validation": 1,
-    "test": 2, "testing": 2, "eval": 2,
-}
-
-
-def _split_rank(name: str) -> int:
-    return _SPLIT_RANK.get(str(name).lower(), 99)
-
-
-def _find_split_col(grouping_columns: List[str]) -> Optional[str]:
-    for c in grouping_columns:
-        if any(k in c.lower() for k in ("split", "fold", "partition")):
-            return c
-    return None
 
 
 def ts_normalization_leakage_checks(
